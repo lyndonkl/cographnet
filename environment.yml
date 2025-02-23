@@ -1,0 +1,13 @@
+name: cographnet
+channels:
+  - pytorch
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.12
+  - pytorch=2.5.*
+  - numpy
+  - tqdm
+  - transformers
+  - sympy=1.13.1
+  - nltk

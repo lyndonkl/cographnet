@@ -1,17 +1,15 @@
 # Python
 __pycache__/
-*.py[cod]
-*$py.class
+*.pyc    # compiled python
+*.pyo    # optimized python
+*.pyd    # python DLL
 *.so
-.Python
 build/
 develop-eggs/
 dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
 parts/
 sdist/
 var/
@@ -45,7 +43,7 @@ venv.bak/
 *.ipynb
 
 # Data and Models
-data/
+/data/             # Only ignore data/ in root directory
 *.pkl
 *.h5
 *.pt
@@ -76,14 +74,6 @@ htmlcov/
 coverage.xml
 *.cover
 .hypothesis/
-
-# Distribution
-.Python
-*.pyc
-*.pyo
-*.pyd
-.Python
-*.so
 
 # Documentation
 docs/_build/
