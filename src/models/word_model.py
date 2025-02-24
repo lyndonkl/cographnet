@@ -1,9 +1,9 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from .layers.word.attention import WordAttention
 from .layers.word.gnn import WordGNN
 from .layers.word.readout import WordReadout
-from .layers.swiglu import SwiGLU
 
 class WordGraphModel(nn.Module):
     """Word-level graph processing model with GRU and SwiGLU activation."""
@@ -20,9 +20,12 @@ class WordGraphModel(nn.Module):
         # Initial projection
         self.input_proj = nn.Linear(input_dim, hidden_dim)
         
-        # GRU layer with SwiGLU
+        # GRU layer
         self.gru = nn.GRU(hidden_dim, hidden_dim, batch_first=True)
-        self.swiglu = SwiGLU(hidden_dim)
+        
+        # SwiGLU components
+        self.w = nn.Linear(hidden_dim, hidden_dim)
+        self.v = nn.Linear(hidden_dim, hidden_dim)
         
         # Stack of GNN layers for multi-hop interactions
         self.layers = nn.ModuleList([
@@ -39,6 +42,10 @@ class WordGraphModel(nn.Module):
         # *2 because readout concatenates max_pool and mean_pool, each of size hidden_dim
         # Example: If hidden_dim=128, readout returns [max_pool(128) | mean_pool(128)] = 256 features
         self.output_proj = nn.Linear(hidden_dim * 2, output_dim)
+        
+    def swiglu(self, x: torch.Tensor) -> torch.Tensor:
+        """SwiGLU activation: x * sigmoid(beta * x)"""
+        return self.w(x) * F.silu(self.v(x))
         
     def forward(self, x: torch.Tensor, edge_index: torch.Tensor, edge_weight: torch.Tensor) -> torch.Tensor:
         # Initial projection
