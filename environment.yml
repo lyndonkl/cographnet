@@ -11,3 +11,5 @@ dependencies:
   - transformers
   - sympy=1.13.1
   - nltk
+  - scikit-learn
+  - logging
