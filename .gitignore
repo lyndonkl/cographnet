@@ -44,6 +44,8 @@ venv.bak/
 
 # Data and Models
 /data/             # Only ignore data/ in root directory
+/processed_data/   # Only ignore processed_data/ in root directory
+/processed_graphs/ # Only ignore processed_graphs/ in root directory
 *.pkl
 *.h5
 *.pt
