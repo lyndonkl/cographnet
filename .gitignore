@@ -43,9 +43,9 @@ venv.bak/
 *.ipynb
 
 # Data and Models
-/data/             # Only ignore data/ in root directory
-/processed_data/   # Only ignore processed_data/ in root directory
-/processed_graphs/ # Only ignore processed_graphs/ in root directory
+/data/
+/processed_data/
+/processed_graphs/
 *.pkl
 *.h5
 *.pt
