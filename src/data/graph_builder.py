@@ -1,10 +1,9 @@
 from pathlib import Path
 import json
-from typing import List, Dict, Tuple
+from typing import List, Dict
 import torch
 from torch_geometric.data import HeteroData
 from transformers import BertTokenizer, BertModel
-import numpy as np
 from tqdm import tqdm
 import nltk
 from nltk.corpus import stopwords
