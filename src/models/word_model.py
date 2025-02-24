@@ -1,49 +1,62 @@
 import torch
 import torch.nn as nn
-from .layers.gru_block import GRUBlock
-from .layers.graph_attention import GraphAttentionBlock
-from .layers.readout import ReadoutLayer
+from .layers.word.attention import WordAttention
+from .layers.word.gnn import WordGNN
+from .layers.word.readout import WordReadout
+from .layers.swiglu import SwiGLU
 
 class WordGraphModel(nn.Module):
-    """Word-level graph processing model."""
+    """Word-level graph processing model with GRU and SwiGLU activation."""
     
     def __init__(
         self,
         input_dim: int,
         hidden_dim: int,
         output_dim: int,
-        swiglu_hidden_dim: int = None
+        num_layers: int = 3
     ):
         super().__init__()
         
-        # GRU with SwiGLU
-        self.gru = GRUBlock(
-            input_dim=input_dim,
-            hidden_dim=hidden_dim,
-            swiglu_hidden_dim=swiglu_hidden_dim
-        )
+        # Initial projection
+        self.input_proj = nn.Linear(input_dim, hidden_dim)
         
-        # Use swiglu output dim for subsequent layers if specified
-        conv_dim = swiglu_hidden_dim or hidden_dim
+        # GRU layer with SwiGLU
+        self.gru = nn.GRU(hidden_dim, hidden_dim, batch_first=True)
+        self.swiglu = SwiGLU(hidden_dim)
         
-        # Graph attention
-        self.graph_conv = GraphAttentionBlock(conv_dim, conv_dim)
+        # Stack of GNN layers for multi-hop interactions
+        self.layers = nn.ModuleList([
+            nn.ModuleDict({
+                'attention': WordAttention(hidden_dim),
+                'gnn': WordGNN(hidden_dim)
+            }) for _ in range(num_layers)
+        ])
         
-        # Readout
-        self.readout = ReadoutLayer(conv_dim)
+        # Readout for graph-level representation
+        self.readout = WordReadout(hidden_dim)
         
         # Final projection
-        self.proj = nn.Linear(conv_dim * 2, output_dim)  # *2 due to concat in readout
+        # *2 because readout concatenates max_pool and mean_pool, each of size hidden_dim
+        # Example: If hidden_dim=128, readout returns [max_pool(128) | mean_pool(128)] = 256 features
+        self.output_proj = nn.Linear(hidden_dim * 2, output_dim)
         
-    def forward(self, x: torch.Tensor, edge_index: torch.Tensor, edge_attr: torch.Tensor):
-        # GRU processing
-        x = self.gru(x)
+    def forward(self, x: torch.Tensor, edge_index: torch.Tensor, edge_weight: torch.Tensor) -> torch.Tensor:
+        # Initial projection
+        x = self.input_proj(x)
         
-        # Graph convolution
-        x = self.graph_conv(x, edge_index, edge_attr)
+        # GRU processing with SwiGLU activation
+        x, _ = self.gru(x)
+        x = self.swiglu(x)
         
-        # Readout
+        # Process through GNN layers for multi-hop interactions
+        for layer in self.layers:
+            # Apply attention
+            attended = layer['attention'](x, edge_index, edge_weight)
+            # Apply GNN
+            x = layer['gnn'](attended, edge_index, edge_weight)
+        
+        # Readout to get graph-level representation
         x = self.readout(x)
         
-        # Project to output dimension
-        return self.proj(x) 
+        # Final projection
+        return self.output_proj(x) 

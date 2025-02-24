@@ -1,49 +1,69 @@
 import torch
 import torch.nn as nn
-from .layers.gru_block import BiGRUBlock
-from .layers.graph_attention import GraphAttentionBlock
-from .layers.readout import ReadoutLayer
+import torch.nn.functional as F
+from .layers.sentence.readout import SentenceReadout
+from .layers.sentence.graph_prop import SentenceGraphProp
 
 class SentenceGraphModel(nn.Module):
-    """Sentence-level graph processing model."""
+    """Sentence-level graph processing model with BiGRU and SwiGLU activation."""
     
     def __init__(
         self,
         input_dim: int,
         hidden_dim: int,
-        output_dim: int,
-        swiglu_hidden_dim: int = None
+        output_dim: int
     ):
         super().__init__()
         
-        # Bi-GRU with SwiGLU
-        self.bigru = BiGRUBlock(
-            input_dim=input_dim,
-            hidden_dim=hidden_dim,
-            swiglu_hidden_dim=swiglu_hidden_dim
+        # Initial projection
+        self.input_proj = nn.Linear(input_dim, hidden_dim)
+        
+        # BiGRU for sentence processing
+        self.bigru = nn.GRU(
+            hidden_dim, 
+            hidden_dim // 2,  # Half size because bidirectional will double it
+            bidirectional=True,
+            batch_first=True
         )
         
-        # Use swiglu output dim for subsequent layers if specified
-        conv_dim = swiglu_hidden_dim or (hidden_dim * 2)  # *2 for bidirectional
+        # SwiGLU components
+        self.w = nn.Linear(hidden_dim, hidden_dim)
+        self.v = nn.Linear(hidden_dim, hidden_dim)
         
-        # Graph attention
-        self.graph_conv = GraphAttentionBlock(conv_dim, conv_dim)
+        # Graph propagation layer
+        self.graph_prop = SentenceGraphProp(hidden_dim)
         
         # Readout
-        self.readout = ReadoutLayer(conv_dim)
+        self.readout = SentenceReadout(hidden_dim)
         
         # Final projection
-        self.proj = nn.Linear(conv_dim * 2, output_dim)  # *2 due to concat in readout
+        self.output_proj = nn.Linear(hidden_dim * 2, output_dim)
         
-    def forward(self, x: torch.Tensor, edge_index: torch.Tensor, edge_attr: torch.Tensor):
-        # Bi-GRU processing
-        x = self.bigru(x)
+    def swiglu(self, x: torch.Tensor) -> torch.Tensor:
+        """SwiGLU activation: x * sigmoid(beta * x)"""
+        return self.w(x) * F.silu(self.v(x))
         
-        # Graph convolution
-        x = self.graph_conv(x, edge_index, edge_attr)
+    def forward(self, x: torch.Tensor, edge_index: torch.Tensor, edge_weight: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x: Sentence features [num_sentences, input_dim]
+            edge_index: Edge indices [2, num_edges]
+            edge_weight: Edge weights from cosine similarity and position bias [num_edges]
+        """
+        # Initial projection
+        x = self.input_proj(x)
         
-        # Readout
+        # BiGRU processing
+        x, _ = self.bigru(x)
+        
+        # Apply SwiGLU activation
+        x = self.swiglu(x)
+        
+        # Graph propagation using edge weights
+        x = x + self.graph_prop(x, edge_index, edge_weight)  # Residual connection
+        
+        # Readout to get graph-level representation
         x = self.readout(x)
         
-        # Project to output dimension
-        return self.proj(x) 
+        # Final projection
+        return self.output_proj(x) 
