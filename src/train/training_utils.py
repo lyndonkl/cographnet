@@ -4,13 +4,18 @@ from dataclasses import dataclass
 
 @dataclass
 class EarlyStopping:
-    """Early stopping utility."""
+    """Early stopping utility with distributed training support."""
     patience: int = 7
     min_delta: float = 0.0
     counter: int = 0
     best_loss: Optional[float] = None
     
     def __call__(self, val_loss: float) -> bool:
+        # Ensure val_loss is synchronized across processes
+        val_loss_tensor = torch.tensor([val_loss])
+        torch.distributed.all_reduce(val_loss_tensor, op=torch.distributed.ReduceOp.MIN)
+        val_loss = val_loss_tensor.item()
+        
         if self.best_loss is None:
             self.best_loss = val_loss
             return False
