@@ -73,7 +73,7 @@ class CoGraphNet(nn.Module):
         sentence_out = self.sentence_model(
             data['sentence'].x,
             data['sentence', 'related_to', 'sentence'].edge_index,
-            data['sentence', 'related_to', 'sentence'].edge_weight
+            data['sentence', 'related_to', 'sentence'].edge_attr
         )
         
         # Fuse word and sentence features using learned weights

@@ -80,11 +80,27 @@ class DocumentGraphDataset(Dataset):
         print("Processing documents...")
         self.valid_indices = []
         
-        for idx, doc in enumerate(self.documents):
+        # Get process info
+        if torch.distributed.is_initialized():
+            rank = torch.distributed.get_rank()
+            world_size = torch.distributed.get_world_size()
+        else:
+            rank = 0
+            world_size = 1
+        
+        # Divide documents among processes
+        docs_per_process = len(self.documents) // world_size
+        start_idx = rank * docs_per_process
+        end_idx = start_idx + docs_per_process if rank < world_size - 1 else len(self.documents)
+        
+        # Process only assigned documents
+        for idx in range(start_idx, end_idx):
             try:
+                doc = self.documents[idx]
                 data = self.graph_builder.build_graph(doc['text'])
                 label_idx = self.category_to_idx[doc['category']]
-                data.y = F.one_hot(torch.tensor(label_idx), num_classes=len(self.category_to_idx)).float()
+                data.y = F.one_hot(torch.tensor(label_idx), 
+                                 num_classes=len(self.category_to_idx)).float()
                 
                 if self.pre_filter is not None and not self.pre_filter(data):
                     continue
@@ -100,10 +116,29 @@ class DocumentGraphDataset(Dataset):
                 print(f"Error processing document {idx}: {str(e)}")
                 continue
         
-        # Save valid indices to metadata
-        print(f"Saving metadata with {len(self.valid_indices)} valid documents")
-        metadata_path = Path(self.processed_dir) / 'metadata.pt'
-        torch.save(self.valid_indices, metadata_path)
+        # Wait for all processes to finish processing their documents
+        if world_size > 1:
+            torch.distributed.barrier()
+            
+            # Gather valid indices from all processes
+            all_indices = [[] for _ in range(world_size)]
+            torch.distributed.all_gather_object(all_indices, self.valid_indices)
+            
+            # Wait for gather to complete
+            torch.distributed.barrier()
+            
+            # Combine all indices
+            self.valid_indices = sorted(sum(all_indices, []))
+        
+        # Save metadata (only from main process)
+        if rank == 0:
+            print(f"Saving metadata with {len(self.valid_indices)} valid documents")
+            metadata_path = Path(self.processed_dir) / 'metadata.pt'
+            torch.save(self.valid_indices, metadata_path)
+        
+        # Final barrier to ensure metadata is saved before any process proceeds
+        if world_size > 1:
+            torch.distributed.barrier()
 
     def get(self, idx: int):
         """Get a single example from the dataset."""

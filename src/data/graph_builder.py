@@ -9,6 +9,7 @@ import nltk
 from nltk.corpus import stopwords
 import os
 import ssl
+from nltk.tokenize import sent_tokenize  # Better sentence tokenization
 
 class GraphBuilder:
     def __init__(
@@ -118,23 +119,76 @@ class GraphBuilder:
         # Create HeteroData object
         data = HeteroData()
         
-        # Get word inputs for BERT
-        word_inputs = self.tokenizer(
+        # Get BERT embeddings for the whole text first
+        text_inputs = self.tokenizer(
             doc_text,
             padding=True,
             truncation=True,
             return_tensors='pt'
         )
         
-        # Create word nodes using BERT
         with torch.no_grad():
-            word_outputs = self.bert(**word_inputs)
-            data['word'].x = word_outputs.last_hidden_state[:, 0, :]
-        
-        # Split document into words and create vocabulary
+            outputs = self.bert(**text_inputs)
+            # Get the full contextual embeddings
+            full_embeddings = outputs.last_hidden_state[0]  # Remove batch dimension
+            
+        # Create word nodes with contextual embeddings
         doc_words = doc_text.split()
         doc_vocab = list(set(doc_words))
         doc_word_id_map = {word: idx for idx, word in enumerate(doc_vocab)}
+        
+        # Initialize word embeddings
+        word_embeddings = torch.zeros(len(doc_vocab), full_embeddings.size(-1))
+        
+        # Process each unique word
+        for word in doc_vocab:
+            # Tokenize single word to get its tokens
+            word_tokens = self.tokenizer.tokenize(word)
+            if not word_tokens:
+                continue
+            
+            # Get embeddings for this word by tokenizing it separately
+            word_inputs = self.tokenizer(
+                word,
+                padding=True,
+                truncation=True,
+                return_tensors='pt'
+            )
+            
+            with torch.no_grad():
+                word_outputs = self.bert(**word_inputs)
+                # Average the token embeddings for this word (excluding [CLS] and [SEP])
+                word_emb = word_outputs.last_hidden_state[0, 1:-1].mean(0)
+                word_embeddings[doc_word_id_map[word]] = word_emb
+        
+        # Store word embeddings
+        data['word'].x = word_embeddings
+        
+        # Create sentence embeddings using mean pooling over all tokens
+        sentences = sent_tokenize(doc_text)
+        sentence_embeddings = []
+        
+        for sentence in sentences:
+            sent_inputs = self.tokenizer(
+                sentence,
+                padding=True,
+                truncation=True,
+                return_tensors='pt'
+            )
+            
+            with torch.no_grad():
+                sent_outputs = self.bert(**sent_inputs)
+                # Mean pooling excluding special tokens
+                token_embeddings = sent_outputs.last_hidden_state[0]
+                attention_mask = sent_inputs['attention_mask'][0]
+                
+                # Only average over actual tokens (exclude [CLS], [SEP], and padding)
+                masked_embeddings = token_embeddings[1:-1] * attention_mask[1:-1].unsqueeze(-1)
+                sent_emb = masked_embeddings.sum(dim=0) / attention_mask[1:-1].sum()
+                sentence_embeddings.append(sent_emb)
+        
+        # Store sentence embeddings
+        data['sentence'].x = torch.stack(sentence_embeddings)
         
         # Create sliding windows
         windows = []
@@ -155,36 +209,31 @@ class GraphBuilder:
                     word_p = window[p]
                     word_q = window[q]
                     
-                    # Get word indices in the document vocabulary
+                    # Get word indices from the unique word mapping
                     word_p_id = doc_word_id_map[word_p]
                     word_q_id = doc_word_id_map[word_q]
                     
                     if word_p_id == word_q_id:
                         continue
                     
-                    # Calculate positional weight using our formula
-                    # ρ is the position of the first word (q) in window
-                    # L is window length
+                    # Calculate positional weight
                     rho = q
                     L = len(window)
                     pos_weight = (self.alpha * (rho/L)) + ((1 - self.alpha) * ((L - rho)/L))
                     
                     # Create forward edge (q -> p)
-                    edge_key = (word_q_id, word_p_id)  # q comes before p in the window
+                    edge_key = (word_q_id, word_p_id)
                     if edge_key in word_pair_weights:
                         word_pair_weights[edge_key].append(pos_weight)
                     else:
                         word_pair_weights[edge_key] = [pos_weight]
                     
-                    # Create reverse edge (p -> q) with same weight
+                    # Create reverse edge (p -> q)
                     rev_edge_key = (word_p_id, word_q_id)
                     if rev_edge_key in word_pair_weights:
                         word_pair_weights[rev_edge_key].append(pos_weight)
                     else:
                         word_pair_weights[rev_edge_key] = [pos_weight]
-                
-                # We don't create reverse edges with the same weight
-                # because the positional relationship is directional
         
         # Create final edges and weights
         word_word_edges = []
@@ -202,29 +251,6 @@ class GraphBuilder:
             data['word', 'co_occurs', 'word'].edge_attr = torch.tensor(
                 edge_weights
             ).float()
-        
-        # Create sentence nodes
-        sentences = [s.strip() for s in doc_text.split('.') if s.strip()]
-        
-        if not sentences:
-            # If no valid sentences, create a single sentence node from the whole text
-            print(f"No valid sentences found, using entire text as one sentence")
-            sentences = [doc_text]
-        
-        sentence_embeddings = []
-        for sentence in sentences:
-            inputs = self.tokenizer(
-                sentence, 
-                return_tensors='pt', 
-                padding=True, 
-                truncation=True
-            )
-            with torch.no_grad():
-                outputs = self.bert(**inputs)
-                sentence_embeddings.append(outputs.last_hidden_state[:, 0, :].squeeze())
-        
-        # Create sentence nodes
-        data['sentence'].x = torch.stack(sentence_embeddings)
         
         # Create sentence-sentence edges only if we have multiple sentences
         if len(sentences) > 1:
