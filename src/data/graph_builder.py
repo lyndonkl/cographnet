@@ -126,68 +126,69 @@ class GraphBuilder:
             truncation=True,
             return_tensors='pt'
         )
-        
+
         with torch.no_grad():
             outputs = self.bert(**text_inputs)
             # Get the full contextual embeddings
-            full_embeddings = outputs.last_hidden_state[0]  # Remove batch dimension
-            
+            full_embeddings = outputs.last_hidden_state[0]  # Shape: (num_tokens, hidden_dim)
+
+        # Tokenized version of the full document (WordPiece tokens)
+        full_tokens = self.tokenizer.convert_ids_to_tokens(text_inputs["input_ids"][0])
+
         # Create word nodes with contextual embeddings
         doc_words = doc_text.split()
-        doc_vocab = list(set(doc_words))
-        doc_word_id_map = {word: idx for idx, word in enumerate(doc_vocab)}
-        
-        # Initialize word embeddings
+        doc_vocab = list(set(doc_words))  # Unique words in document
+        doc_word_id_map = {word: idx for idx, word in enumerate(doc_vocab)}  # Preserve mapping
+
+        # Initialize word embeddings tensor
         word_embeddings = torch.zeros(len(doc_vocab), full_embeddings.size(-1))
-        
+
         # Process each unique word
         for word in doc_vocab:
-            # Tokenize single word to get its tokens
+            # Tokenize the word using BERT's tokenizer (WordPiece tokenization)
             word_tokens = self.tokenizer.tokenize(word)
             if not word_tokens:
                 continue
             
-            # Get embeddings for this word by tokenizing it separately
-            word_inputs = self.tokenizer(
-                word,
-                padding=True,
-                truncation=True,
-                return_tensors='pt'
-            )
-            
-            with torch.no_grad():
-                word_outputs = self.bert(**word_inputs)
-                # Average the token embeddings for this word (excluding [CLS] and [SEP])
-                word_emb = word_outputs.last_hidden_state[0, 1:-1].mean(0)
-                word_embeddings[doc_word_id_map[word]] = word_emb
-        
+            # Find matching token positions in the full document's tokenized output
+            token_indices = [i for i, token in enumerate(full_tokens) if token in word_tokens]
+
+            if not token_indices:  # Skip if word tokens were not found
+                continue
+
+            # Extract and average embeddings of matched subwords
+            word_emb = full_embeddings[token_indices].mean(dim=0)  # Mean pooling
+
+            # Store the embedding in the tensor using doc_word_id_map
+            word_embeddings[doc_word_id_map[word]] = word_emb
+
         # Store word embeddings
         data['word'].x = word_embeddings
         
-        # Create sentence embeddings using mean pooling over all tokens
+        # Tokenize text into sentences
         sentences = sent_tokenize(doc_text)
         sentence_embeddings = []
-        
+
         for sentence in sentences:
+            # Tokenize the sentence and convert to input tensor
             sent_inputs = self.tokenizer(
                 sentence,
                 padding=True,
                 truncation=True,
                 return_tensors='pt'
             )
-            
+
             with torch.no_grad():
                 sent_outputs = self.bert(**sent_inputs)
-                # Mean pooling excluding special tokens
-                token_embeddings = sent_outputs.last_hidden_state[0]
-                attention_mask = sent_inputs['attention_mask'][0]
-                
-                # Only average over actual tokens (exclude [CLS], [SEP], and padding)
-                masked_embeddings = token_embeddings[1:-1] * attention_mask[1:-1].unsqueeze(-1)
-                sent_emb = masked_embeddings.sum(dim=0) / attention_mask[1:-1].sum()
-                sentence_embeddings.append(sent_emb)
-        
-        # Store sentence embeddings
+                token_embeddings = sent_outputs.last_hidden_state  # Shape: (batch_size, seq_len, hidden_dim)
+
+                ## Use [CLS] Token for Sentence Embedding
+                sent_emb = token_embeddings[:, 0, :]  # Extract [CLS] token embedding
+
+                # Store the sentence embedding
+                sentence_embeddings.append(sent_emb.squeeze(0))
+
+        # Stack sentence embeddings into a tensor
         data['sentence'].x = torch.stack(sentence_embeddings)
         
         # Create sliding windows

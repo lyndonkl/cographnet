@@ -99,8 +99,9 @@ class DocumentGraphDataset(Dataset):
                 doc = self.documents[idx]
                 data = self.graph_builder.build_graph(doc['text'])
                 label_idx = self.category_to_idx[doc['category']]
-                data.y = F.one_hot(torch.tensor(label_idx), 
-                                 num_classes=len(self.category_to_idx)).float()
+                
+                # Store the label index directly instead of one-hot encoding
+                data.y = torch.tensor(label_idx, dtype=torch.long)
                 
                 if self.pre_filter is not None and not self.pre_filter(data):
                     continue
