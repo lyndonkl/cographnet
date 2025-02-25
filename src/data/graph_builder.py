@@ -7,6 +7,8 @@ from transformers import BertTokenizer, BertModel
 from tqdm import tqdm
 import nltk
 from nltk.corpus import stopwords
+import os
+import ssl
 
 class GraphBuilder:
     def __init__(
@@ -24,14 +26,34 @@ class GraphBuilder:
             bert_model: BERT model name for embeddings
             min_word_freq: Minimum frequency for a word to be included
         """
+        # Configure SSL verification at all levels
+        os.environ['REQUESTS_CA_BUNDLE'] = ''
+        os.environ['SSL_CERT_FILE'] = ''
+        os.environ['CURL_CA_BUNDLE'] = ''
+
         self.window_size = window_size
         self.alpha = alpha
         self.min_word_freq = min_word_freq
         self.tokenizer = BertTokenizer.from_pretrained(bert_model)
         self.bert = BertModel.from_pretrained(bert_model)
-        # Initialize stopwords
-        nltk.download('stopwords', quiet=True)
-        self.stop_words = set(stopwords.words('english'))
+        
+        # Configure SSL verification at all levels
+        os.environ['REQUESTS_CA_BUNDLE'] = '/Users/kdsouza/Documents/Projects/cacerts/ZscalerRoot.pem'
+        os.environ['SSL_CERT_FILE'] = '/Users/kdsouza/Documents/Projects/cacerts/ZscalerRoot.pem'
+        os.environ['CURL_CA_BUNDLE'] = '/Users/kdsouza/Documents/Projects/cacerts/ZscalerRoot.pem'
+
+        # Initialize stopwords with SSL verification disabled
+        try:
+            # Create unverified context for NLTK
+            ssl._create_default_https_context = ssl._create_unverified_context
+            nltk.download('stopwords', quiet=True)
+            self.stop_words = set(stopwords.words('english'))
+        except Exception as e:
+            print(f"Error downloading NLTK data: {e}")
+            # Fallback to a basic set of stopwords if download fails
+            self.stop_words = {'a', 'an', 'and', 'are', 'as', 'at', 'be', 'by', 'for',
+                             'from', 'has', 'he', 'in', 'is', 'it', 'its', 'of', 'on',
+                             'that', 'the', 'to', 'was', 'were', 'will', 'with'}
         
     def load_documents(self, json_files: List[Path]) -> List[Dict]:
         """Load documents from JSON files."""
@@ -77,33 +99,42 @@ class GraphBuilder:
             and word_freq.get(word.lower(), 0) >= self.min_word_freq
         ]
         
+        if not filtered_words:
+            raise ValueError(f"Document has no words meeting minimum frequency threshold of {self.min_word_freq}")
+        
         return ' '.join(filtered_words)
 
-    def build_graph(self, document: str) -> HeteroData:
-        """Build heterogeneous graph from document."""
+    def build_graph(self, text: str) -> HeteroData:
+        """Build a heterogeneous graph from document text."""
+        print(f"Building graph from text: {text[:100]}...")
+        
         # Preprocess document
-        document = self._preprocess_document(document)
+        doc_text = self._preprocess_document(text)
+        print(f"Preprocessed text: {doc_text[:100]}...")
+        
+        if not doc_text.strip():
+            raise ValueError("Document is empty after preprocessing")
         
         # Create HeteroData object
         data = HeteroData()
         
-        # Split document into words
-        doc_words = document.split()
-        
-        # Create vocabulary for this document (unique words)
-        doc_vocab = list(set(doc_words))
-        doc_word_id_map = {word: idx for idx, word in enumerate(doc_vocab)}
+        # Get word inputs for BERT
+        word_inputs = self.tokenizer(
+            doc_text,
+            padding=True,
+            truncation=True,
+            return_tensors='pt'
+        )
         
         # Create word nodes using BERT
         with torch.no_grad():
-            word_inputs = self.tokenizer(
-                doc_vocab,
-                return_tensors='pt', 
-                padding=True, 
-                truncation=True
-            )
             word_outputs = self.bert(**word_inputs)
             data['word'].x = word_outputs.last_hidden_state[:, 0, :]
+        
+        # Split document into words and create vocabulary
+        doc_words = doc_text.split()
+        doc_vocab = list(set(doc_words))
+        doc_word_id_map = {word: idx for idx, word in enumerate(doc_vocab)}
         
         # Create sliding windows
         windows = []
@@ -173,8 +204,14 @@ class GraphBuilder:
             ).float()
         
         # Create sentence nodes
+        sentences = [s.strip() for s in doc_text.split('.') if s.strip()]
+        
+        if not sentences:
+            # If no valid sentences, create a single sentence node from the whole text
+            print(f"No valid sentences found, using entire text as one sentence")
+            sentences = [doc_text]
+        
         sentence_embeddings = []
-        sentences = [s.strip() for s in document.split('.') if s.strip()]
         for sentence in sentences:
             inputs = self.tokenizer(
                 sentence, 
@@ -182,40 +219,41 @@ class GraphBuilder:
                 padding=True, 
                 truncation=True
             )
-            outputs = self.bert(**inputs)
-            # Use [CLS] token embedding as sentence embedding
-            sentence_embeddings.append(outputs.last_hidden_state[:, 0, :].squeeze())
+            with torch.no_grad():
+                outputs = self.bert(**inputs)
+                sentence_embeddings.append(outputs.last_hidden_state[:, 0, :].squeeze())
         
         # Create sentence nodes
         data['sentence'].x = torch.stack(sentence_embeddings)
         
-        # Create sentence-sentence edges
-        sentence_edges = []
-        sentence_edge_weights = []
-        
-        for i in range(len(sentences)):
-            for j in range(i + 1, len(sentences)):
-                # Forward edge (i -> j)
-                sentence_edges.append([i, j])
-                weight = self._calculate_sentence_edge_weight(
-                    sentence_embeddings[i],
-                    sentence_embeddings[j],
-                    i,
-                    j
-                )
-                sentence_edge_weights.append(weight)
-                
-                # Reverse edge (j -> i) with same weight
-                sentence_edges.append([j, i])
-                sentence_edge_weights.append(weight)
-        
-        if sentence_edges:  # Check if we have any edges
-            data['sentence', 'related_to', 'sentence'].edge_index = torch.tensor(
-                sentence_edges
-            ).t()
-            data['sentence', 'related_to', 'sentence'].edge_attr = torch.tensor(
-                sentence_edge_weights
-            ).float()
+        # Create sentence-sentence edges only if we have multiple sentences
+        if len(sentences) > 1:
+            sentence_edges = []
+            sentence_edge_weights = []
+            
+            for i in range(len(sentences)):
+                for j in range(i + 1, len(sentences)):
+                    # Forward edge (i -> j)
+                    sentence_edges.append([i, j])
+                    weight = self._calculate_sentence_edge_weight(
+                        sentence_embeddings[i],
+                        sentence_embeddings[j],
+                        i,
+                        j
+                    )
+                    sentence_edge_weights.append(weight)
+                    
+                    # Reverse edge (j -> i) with same weight
+                    sentence_edges.append([j, i])
+                    sentence_edge_weights.append(weight)
+            
+            if sentence_edges:  # Check if we have any edges
+                data['sentence', 'related_to', 'sentence'].edge_index = torch.tensor(
+                    sentence_edges
+                ).t()
+                data['sentence', 'related_to', 'sentence'].edge_attr = torch.tensor(
+                    sentence_edge_weights
+                ).float()
         
         return data
 

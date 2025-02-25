@@ -37,71 +37,90 @@ class DocumentGraphDataset(Dataset):
         self.categories = set()
         for file in self.data_dir.glob('*.json'):
             with open(file, 'r', encoding='utf-8') as f:
-                doc = json.load(f)
-                self.documents.append(doc)
-                self.categories.add(doc['category'])
+                try:
+                    doc = json.load(f)
+                    if 'text' in doc and 'category' in doc and doc['text'].strip() and doc['category'].strip():
+                        self.documents.append(doc)
+                        self.categories.add(doc['category'])
+                    else:
+                        print(f"Skipping invalid document in {file}: missing text or category")
+                except json.JSONDecodeError:
+                    print(f"Skipping invalid JSON file: {file}")
+                except Exception as e:
+                    print(f"Error processing file {file}: {e}")
         
-        # Use provided category mapping or create new one
+        if not self.documents:
+            raise ValueError(f"No valid documents found in {data_dir}")
+        
         self.category_to_idx = category_to_idx if category_to_idx is not None else {
             cat: idx for idx, cat in enumerate(sorted(self.categories))
         }
         
+        # Initialize with empty valid_indices - will be loaded from metadata
+        self.valid_indices = []
         super().__init__(root, transform, pre_transform, pre_filter)
-
-    @property
-    def raw_file_names(self) -> List[str]:
-        """List of files in the raw directory."""
-        return [f"doc_{idx}.json" for idx in range(len(self.documents))]
 
     @property
     def processed_file_names(self) -> List[str]:
         """List of files in the processed directory."""
-        return [f'data_{idx}.pt' for idx in range(len(self.documents))]
+        # Check if metadata exists and load valid indices
+        metadata_path = Path(self.processed_dir) / 'metadata.pt'
+        if metadata_path.exists():
+            print("Loading existing valid indices from metadata")
+            self.valid_indices = torch.load(metadata_path)
+            print(f"Found {len(self.valid_indices)} processed documents")
+            # Return only the files we know exist
+            return ['metadata.pt'] + [f'data_{idx}.pt' for idx in self.valid_indices]
+        
+        # If no metadata exists, return empty list to trigger processing
+        return []
 
     def process(self):
         """Process raw documents into graphs and save them."""
+        print("Processing documents...")
+        self.valid_indices = []
+        
         for idx, doc in enumerate(self.documents):
-            # Create graph from document text
-            data = self.graph_builder.build_graph(doc['text'])
-            
-            # Convert category to one-hot encoded label
-            label_idx = self.category_to_idx[doc['category']]
-            data.y = F.one_hot(torch.tensor(label_idx), num_classes=len(self.category_to_idx)).float()
-            
-            # Apply pre_filter if it exists
-            if self.pre_filter is not None and not self.pre_filter(data):
+            try:
+                data = self.graph_builder.build_graph(doc['text'])
+                label_idx = self.category_to_idx[doc['category']]
+                data.y = F.one_hot(torch.tensor(label_idx), num_classes=len(self.category_to_idx)).float()
+                
+                if self.pre_filter is not None and not self.pre_filter(data):
+                    continue
+                if self.pre_transform is not None:
+                    data = self.pre_transform(data)
+
+                # Save using original document index
+                file_path = Path(self.processed_dir) / f'data_{idx}.pt'
+                torch.save(data, file_path)
+                self.valid_indices.append(idx)
+                
+            except Exception as e:
+                print(f"Error processing document {idx}: {str(e)}")
                 continue
-
-            # Apply pre_transform if it exists
-            if self.pre_transform is not None:
-                data = self.pre_transform(data)
-
-            # Save processed data
-            torch.save(data, self.processed_paths[idx])
-
-    def len(self) -> int:
-        """Return the number of examples in the dataset."""
-        return len(self.processed_file_names)
+        
+        # Save valid indices to metadata
+        print(f"Saving metadata with {len(self.valid_indices)} valid documents")
+        metadata_path = Path(self.processed_dir) / 'metadata.pt'
+        torch.save(self.valid_indices, metadata_path)
 
     def get(self, idx: int):
         """Get a single example from the dataset."""
-        data = torch.load(self.processed_paths[idx])
+        # Get the original document index from valid_indices
+        doc_idx = self.valid_indices[idx]
+        data = torch.load(Path(self.processed_dir) / f'data_{doc_idx}.pt')
         return data
     
     @property
     def num_classes(self) -> int:
         """Get the number of unique categories."""
         return len(self.category_to_idx)
-    
-    def get_class_weights(self) -> torch.Tensor:
-        """Calculate class weights for handling imbalanced data."""
-        class_counts = torch.zeros(self.num_classes)
-        for doc in self.documents:
-            class_counts[self.category_to_idx[doc['category']]] += 1
-            
-        # Inverse frequency weighting
-        weights = 1.0 / class_counts
-        return weights / weights.sum()
+
+
+    def len(self) -> int:
+        """Get the number of valid documents."""
+        return len(self.valid_indices)
 
 def get_all_categories(train_dir: str, val_dir: str, test_dir: str) -> Set[str]:
     """Get all unique categories across all datasets."""
