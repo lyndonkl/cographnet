@@ -47,7 +47,7 @@ class WordGraphModel(nn.Module):
         """SwiGLU activation: x * sigmoid(beta * x)"""
         return self.w(x) * F.silu(self.v(x))
         
-    def forward(self, x: torch.Tensor, edge_index: torch.Tensor, edge_weight: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, edge_index: torch.Tensor, edge_weight: torch.Tensor, batch: torch.Tensor) -> torch.Tensor:
         # Initial projection
         x = self.input_proj(x)
         
@@ -63,7 +63,7 @@ class WordGraphModel(nn.Module):
             x = layer['gnn'](attended, edge_index, edge_weight)
         
         # Readout to get graph-level representation
-        x = self.readout(x)
+        x = self.readout(x, batch)
         
         # Final projection
         return self.output_proj(x) 

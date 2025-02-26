@@ -43,12 +43,13 @@ class SentenceGraphModel(nn.Module):
         """SwiGLU activation: x * sigmoid(beta * x)"""
         return self.w(x) * F.silu(self.v(x))
         
-    def forward(self, x: torch.Tensor, edge_index: torch.Tensor, edge_weight: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, edge_index: torch.Tensor, edge_weight: torch.Tensor, batch: torch.Tensor) -> torch.Tensor:
         """
         Args:
             x: Sentence features [num_sentences, input_dim]
             edge_index: Edge indices [2, num_edges]
             edge_weight: Edge weights from cosine similarity and position bias [num_edges]
+            batch: Batch indices [num_sentences] indicating which graph each sentence belongs to
         """
         # Initial projection
         x = self.input_proj(x)
@@ -63,7 +64,7 @@ class SentenceGraphModel(nn.Module):
         x = x + self.graph_prop(x, edge_index, edge_weight)  # Residual connection
         
         # Readout to get graph-level representation
-        x = self.readout(x)
+        x = self.readout(x, batch)
         
         # Final projection
         return self.output_proj(x) 

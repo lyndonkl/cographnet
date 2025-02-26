@@ -3,6 +3,9 @@ import argparse
 import torch
 import torch.multiprocessing as mp
 from torch.nn.parallel import DistributedDataParallel
+import warnings
+import urllib3
+import torch.utils.data
 
 from ..models import CoGraphNet
 from ..data.document_dataset import create_dataloaders
@@ -10,6 +13,11 @@ from .trainer import CoGraphTrainer
 from .distributed import setup_distributed, cleanup_distributed
 from .training_utils import EarlyStopping, ModelCheckpoint
 from .utils import setup_logger
+
+# Suppress specific warnings
+warnings.filterwarnings("ignore", category=urllib3.exceptions.InsecureRequestWarning)
+warnings.filterwarnings("ignore", message="You are using `torch.load` with `weights_only=False`")
+warnings.filterwarnings("ignore", category=UserWarning)  # Suppresses PyTorch UserWarnings
 
 def train_distributed(rank: int, world_size: int, args):
     """Distributed training function."""
@@ -24,7 +32,9 @@ def train_distributed(rank: int, world_size: int, args):
             val_dir=args.val_path,
             test_dir=args.test_path,
             batch_size=args.batch_size,
-            num_workers=4
+            num_workers=4,
+            world_size=world_size,
+            rank=rank
         )
         
         # Create model
@@ -53,7 +63,8 @@ def train_distributed(rank: int, world_size: int, args):
             test_loader=test_loader,
             learning_rate=args.learning_rate,
             rank=rank,
-            world_size=world_size
+            world_size=world_size,
+            num_epochs=args.epochs
         )
         
         # Train
@@ -65,7 +76,7 @@ def train_distributed(rank: int, world_size: int, args):
             train_loss = trainer.train_epoch(epoch)
             torch.distributed.barrier()
             
-            val_loss = trainer.validate()
+            val_loss, val_acc = trainer.validate()
             torch.distributed.barrier()
             
             trainer.scheduler.step()
@@ -73,13 +84,14 @@ def train_distributed(rank: int, world_size: int, args):
             
             # Save checkpoints and log on rank 0
             if rank == 0:
-                metrics = {'val_loss': val_loss}
+                metrics = {'val_loss': val_loss, 'val_acc': val_acc}
                 checkpoint(model, metrics)
                 
                 logger.info(
                     f'Epoch {epoch}: '
                     f'Train Loss: {train_loss:.4f}, '
-                    f'Val Loss: {val_loss:.4f}'
+                    f'Val Loss: {val_loss:.4f}, '
+                    f'Val Acc: {val_acc:.4f}'
                 )
             
             # Synchronize early stopping across processes

@@ -58,26 +58,52 @@ class CoGraphNet(nn.Module):
                 - word.x: Word features
                 - word.edge_index: Word graph edges
                 - word.edge_attr: Word edge weights (co-occurrence based)
+                - word.batch: Word batch indices
                 - sentence.x: Sentence features
                 - sentence.edge_index: Sentence graph edges
-                - sentence.edge_weight: Sentence edge weights (cosine similarity * position bias)
+                - sentence.edge_attr: Sentence edge weights
+                - sentence.batch: Sentence batch indices
         """
-        # Process word graph - captures word co-occurrence patterns
+        print("\nCoGraphNet Forward Pass Shapes:")
+        print(f"Input word features shape: {data['word'].x.shape}")
+        print(f"Input word edge_index shape: {data['word', 'co_occurs', 'word'].edge_index.shape}")
+        print(f"Input word edge_attr shape: {data['word', 'co_occurs', 'word'].edge_attr.shape}")
+        print(f"Input word batch shape: {data['word'].batch.shape}")
+        
+        # Process word graph
         word_out = self.word_model(
             data['word'].x,
             data['word', 'co_occurs', 'word'].edge_index,
-            data['word', 'co_occurs', 'word'].edge_attr
+            data['word', 'co_occurs', 'word'].edge_attr,
+            data['word'].batch  # Pass batch indices
         )
+        print(f"Word model output shape: {word_out.shape}")
         
-        # Process sentence graph - captures sentence relationships with position awareness
+        # Process sentence graph
+        print(f"\nInput sentence features shape: {data['sentence'].x.shape}")
+        print(f"Input sentence edge_index shape: {data['sentence', 'related_to', 'sentence'].edge_index.shape}")
+        print(f"Input sentence edge_attr shape: {data['sentence', 'related_to', 'sentence'].edge_attr.shape}")
+        print(f"Input sentence batch shape: {data['sentence'].batch.shape}")
+        
         sentence_out = self.sentence_model(
             data['sentence'].x,
             data['sentence', 'related_to', 'sentence'].edge_index,
-            data['sentence', 'related_to', 'sentence'].edge_attr
+            data['sentence', 'related_to', 'sentence'].edge_attr,
+            data['sentence'].batch  # Pass batch indices
         )
+        print(f"Sentence model output shape: {sentence_out.shape}")
         
-        # Fuse word and sentence features using learned weights
+        # Fuse features
+        print("\nBefore fusion:")
+        print(f"Word features shape: {word_out.shape}")
+        print(f"Sentence features shape: {sentence_out.shape}")
+        
         fused = self.fusion(word_out, sentence_out)
+        print(f"After fusion shape: {fused.shape}")
         
         # Final classification
-        return self.classifier(fused) 
+        outputs = self.classifier(fused)
+        print(f"Final output shape: {outputs.shape}")
+        print(f"Target shape: {data.y.shape}\n")
+        
+        return outputs 

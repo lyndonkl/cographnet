@@ -253,7 +253,11 @@ class GraphBuilder:
                 edge_weights
             ).float()
         
-        # Create sentence-sentence edges only if we have multiple sentences
+        # Initialize empty sentence edges and weights
+        data['sentence', 'related_to', 'sentence'].edge_index = torch.empty((2, 0), dtype=torch.long)
+        data['sentence', 'related_to', 'sentence'].edge_attr = torch.empty(0, dtype=torch.float)
+        
+        # Create sentence-sentence edges if we have multiple sentences
         if len(sentences) > 1:
             sentence_edges = []
             sentence_edge_weights = []

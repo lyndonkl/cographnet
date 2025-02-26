@@ -6,6 +6,9 @@ from torch_geometric.data import Dataset
 from .graph_builder import GraphBuilder
 from torch_geometric.loader import DataLoader
 import torch.nn.functional as F
+import warnings
+
+warnings.filterwarnings("ignore", message="You are using `torch.load` with `weights_only=False`")
 
 class DocumentGraphDataset(Dataset):
     """Dataset for loading processed documents and converting them to graph representations."""
@@ -175,6 +178,8 @@ def create_dataloaders(
     test_dir: str,
     batch_size: int = 32,
     num_workers: int = 4,
+    world_size: int = 1,
+    rank: int = 0,
     **dataset_kwargs
 ) -> Tuple[DataLoader, DataLoader, DataLoader, int]:
     """
@@ -220,9 +225,9 @@ def create_dataloaders(
     )
     
     # Create dataloaders with DistributedSampler
-    train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
-    val_sampler = torch.utils.data.distributed.DistributedSampler(val_dataset)
-    test_sampler = torch.utils.data.distributed.DistributedSampler(test_dataset)
+    train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, shuffle=True, num_replicas=world_size, rank=rank)
+    val_sampler = torch.utils.data.distributed.DistributedSampler(val_dataset, shuffle=False, num_replicas=world_size, rank=rank)
+    test_sampler = torch.utils.data.distributed.DistributedSampler(test_dataset, shuffle=False, num_replicas=world_size, rank=rank)
     
     # Create dataloaders
     train_loader = DataLoader(

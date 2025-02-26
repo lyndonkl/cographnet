@@ -18,7 +18,14 @@ class WordReadout(nn.Module):
             nn.Sigmoid()  # σ
         )
         
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, batch: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x: Word features [num_words, hidden_dim]
+            batch: Batch indices [num_words] indicating which graph each word belongs to
+        Returns:
+            Pooled features [batch_size, hidden_dim*2]
+        """
         # First transform embeddings
         x = self.embedding_transform(x)
         
@@ -26,8 +33,21 @@ class WordReadout(nn.Module):
         attention_scores = self.feature_attention(x)
         attended_features = x * attention_scores
         
-        # Finally pool the attended features
-        max_pool = torch.max(attended_features, dim=0)[0]
-        mean_pool = torch.mean(attended_features, dim=0)
+        # Get number of graphs in batch
+        batch_size = batch.max().item() + 1
         
-        return torch.cat([max_pool, mean_pool]) 
+        # Initialize output tensors
+        max_pool = torch.zeros(batch_size, x.size(1), device=x.device)
+        mean_pool = torch.zeros(batch_size, x.size(1), device=x.device)
+        
+        # Pool for each graph in batch
+        for i in range(batch_size):
+            mask = (batch == i)
+            graph_features = attended_features[mask]
+            
+            if graph_features.size(0) > 0:  # Check if graph has any nodes
+                max_pool[i] = torch.max(graph_features, dim=0)[0]
+                mean_pool[i] = torch.mean(graph_features, dim=0)
+        
+        # Concatenate along feature dimension
+        return torch.cat([max_pool, mean_pool], dim=1)  # [batch_size, hidden_dim*2] 
