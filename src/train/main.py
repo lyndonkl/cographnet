@@ -13,6 +13,7 @@ from .trainer import CoGraphTrainer
 from .distributed import setup_distributed, cleanup_distributed
 from .training_utils import EarlyStopping, ModelCheckpoint
 from .utils import setup_logger
+import torch.distributed as dist
 
 
 from sklearn.utils.class_weight import compute_class_weight
@@ -30,20 +31,30 @@ def compute_class_weights(train_loader, num_classes, device, rank, world_size):
 
         # Collect all labels from dataset
         for batch in train_loader:
-            all_labels.append(batch.y.cpu().numpy())  # Convert to numpy
+            all_labels.append(batch.y.cpu().numpy())
 
-        # Flatten all collected labels
+        # Flatten and find unique labels actually present in dataset
         all_labels = np.concatenate(all_labels, axis=0)
+        unique_labels = np.unique(all_labels)
 
-        # Compute class weights
-        class_weights = compute_class_weight(
+        print(f"Unique labels found in dataset: {unique_labels}")  # Debugging
+
+        # Compute weights for present labels only
+        computed_weights = compute_class_weight(
             class_weight="balanced",
-            classes=np.arange(num_classes),
+            classes=unique_labels,  # ✅ Only use present labels
             y=all_labels
         )
 
+        # Initialize full weight tensor with 0s
+        full_class_weights = np.zeros(num_classes)
+
+        # Assign computed weights to their respective indices
+        for label, weight in zip(unique_labels, computed_weights):
+            full_class_weights[label] = weight  # ✅ Assign weight to the correct label index
+
         # Convert to tensor
-        class_weights = torch.tensor(class_weights, dtype=torch.float, device=device)
+        return torch.tensor(full_class_weights, dtype=torch.float, device=device)
     else:
         # Placeholder tensor for other ranks
         class_weights = torch.zeros(num_classes, dtype=torch.float, device=device)

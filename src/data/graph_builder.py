@@ -3,7 +3,7 @@ import json
 from typing import List, Dict
 import torch
 from torch_geometric.data import HeteroData
-from transformers import BertTokenizer, BertModel
+from transformers import BertTokenizerFast, BertModel
 from tqdm import tqdm
 import nltk
 from nltk.corpus import stopwords
@@ -14,9 +14,9 @@ from nltk.tokenize import sent_tokenize  # Better sentence tokenization
 class GraphBuilder:
     def __init__(
         self, 
-        window_size: int = 3,
+        window_size: int = 5,
         alpha: float = 0.5,
-        bert_model: str = 'bert-base-uncased',
+        bert_model: str = 'dmis-lab/biobert-base-cased-v1.1',
         min_word_freq: int = 5
     ):
         """Initialize the graph builder with configuration parameters.
@@ -35,7 +35,7 @@ class GraphBuilder:
         self.window_size = window_size
         self.alpha = alpha
         self.min_word_freq = min_word_freq
-        self.tokenizer = BertTokenizer.from_pretrained(bert_model)
+        self.tokenizer = BertTokenizerFast.from_pretrained(bert_model)
         self.bert = BertModel.from_pretrained(bert_model)
         
         # Configure SSL verification at all levels
@@ -43,18 +43,20 @@ class GraphBuilder:
         os.environ['SSL_CERT_FILE'] = '/Users/kdsouza/Documents/Projects/cacerts/ZscalerRoot.pem'
         os.environ['CURL_CA_BUNDLE'] = '/Users/kdsouza/Documents/Projects/cacerts/ZscalerRoot.pem'
 
-        # Initialize stopwords with SSL verification disabled
-        try:
-            # Create unverified context for NLTK
-            ssl._create_default_https_context = ssl._create_unverified_context
-            nltk.download('stopwords', quiet=True)
-            self.stop_words = set(stopwords.words('english'))
-        except Exception as e:
-            print(f"Error downloading NLTK data: {e}")
-            # Fallback to a basic set of stopwords if download fails
-            self.stop_words = {'a', 'an', 'and', 'are', 'as', 'at', 'be', 'by', 'for',
-                             'from', 'has', 'he', 'in', 'is', 'it', 'its', 'of', 'on',
-                             'that', 'the', 'to', 'was', 'were', 'will', 'with'}
+        # Medical Stopword List (Better than NLTK's)
+        self.stop_words = {
+            "a", "about", "after", "again", "against", "all", "almost", "also", "although",
+            "among", "an", "and", "any", "are", "as", "at", "be", "because", "been", "before",
+            "being", "between", "both", "but", "by", "can", "could", "did", "do", "does", "doing",
+            "done", "due", "during", "each", "either", "few", "for", "from", "further", "had",
+            "has", "have", "having", "here", "how", "however", "if", "in", "into", "is", "it",
+            "its", "itself", "just", "may", "might", "more", "most", "must", "my", "nor", "not",
+            "now", "of", "on", "once", "only", "or", "other", "ought", "our", "out", "over",
+            "same", "should", "some", "such", "than", "that", "the", "their", "them", "then",
+            "there", "these", "they", "this", "those", "through", "thus", "to", "too", "under",
+            "until", "very", "was", "were", "what", "when", "where", "whether", "which", "while",
+            "who", "whom", "whose", "why", "will", "with", "within", "without", "would", "yet"
+        }
         
     def load_documents(self, json_files: List[Path]) -> List[Dict]:
         """Load documents from JSON files."""
@@ -86,23 +88,17 @@ class GraphBuilder:
     def _preprocess_document(self, document: str) -> str:
         """Preprocess document by removing stopwords and rare words."""
         # Count word frequencies
-        word_freq = {}
-        words = document.split()
-        for word in words:
-            word = word.lower().strip()
-            if word not in self.stop_words:
-                word_freq[word] = word_freq.get(word, 0) + 1
+        words = document.lower().split()
         
-        # Filter words based on frequency
+        # Remove only frequent stopwords, but keep rare words
         filtered_words = [
             word for word in words 
-            if word.lower() not in self.stop_words 
-            and word_freq.get(word.lower(), 0) >= self.min_word_freq
+            if word not in self.medical_stopwords
         ]
-        
+
         if not filtered_words:
-            raise ValueError(f"Document has no words meeting minimum frequency threshold of {self.min_word_freq}")
-        
+            raise ValueError("Document is empty after preprocessing!")
+
         return ' '.join(filtered_words)
 
     def build_graph(self, text: str) -> HeteroData:
@@ -124,8 +120,11 @@ class GraphBuilder:
             doc_text,
             padding=True,
             truncation=True,
-            return_tensors='pt'
+            return_tensors='pt',
+            return_offsets_mapping=True
         )
+
+        offset_mapping = text_inputs.pop('offset_mapping')[0].tolist()  # Get offset positions
 
         with torch.no_grad():
             outputs = self.bert(**text_inputs)
@@ -145,19 +144,17 @@ class GraphBuilder:
 
         # Process each unique word
         for word in doc_vocab:
-            # Tokenize the word using BERT's tokenizer (WordPiece tokenization)
-            word_tokens = self.tokenizer.tokenize(word)
-            if not word_tokens:
-                continue
-            
-            # Find matching token positions in the full document's tokenized output
-            token_indices = [i for i, token in enumerate(full_tokens) if token in word_tokens]
+            # Get subword token positions in the full document
+            token_indices = [
+                i for i, (token, (start, end)) in enumerate(zip(full_tokens, offset_mapping))
+                if token not in ['[CLS]', '[SEP]', '[PAD]'] and doc_text[start:end] == word
+            ]
 
-            if not token_indices:  # Skip if word tokens were not found
+            if not token_indices:  # Skip if no tokens found for this word
                 continue
 
-            # Extract and average embeddings of matched subwords
-            word_emb = full_embeddings[token_indices].mean(dim=0)  # Mean pooling
+            # Aggregate embeddings for subwords (mean pooling)
+            word_emb = full_embeddings[token_indices].mean(dim=0)
 
             # Store the embedding in the tensor using doc_word_id_map
             word_embeddings[doc_word_id_map[word]] = word_emb
@@ -205,53 +202,41 @@ class GraphBuilder:
         
         # Process each window
         for window in windows:
-            for p in range(1, len(window)):
+            L = len(window)  # Window length
+            for p in range(1, L):
                 for q in range(0, p):
-                    word_p = window[p]
-                    word_q = window[q]
-                    
-                    # Get word indices from the unique word mapping
-                    word_p_id = doc_word_id_map[word_p]
-                    word_q_id = doc_word_id_map[word_q]
-                    
-                    if word_p_id == word_q_id:
+                    word_p, word_q = window[p], window[q]
+                    word_p_id, word_q_id = doc_word_id_map[word_p], doc_word_id_map[word_q]
+
+                    if word_p_id == word_q_id:  # Avoid self-loops
                         continue
-                    
-                    # Calculate positional weight
+
+                    # Compute positional weight
                     rho = q
-                    L = len(window)
-                    pos_weight = (self.alpha * (rho/L)) + ((1 - self.alpha) * ((L - rho)/L))
-                    
-                    # Create forward edge (q -> p)
-                    edge_key = (word_q_id, word_p_id)
+                    pos_weight = (self.alpha * (rho / L)) + ((1 - self.alpha) * ((L - rho) / L))
+
+                    # Store weight in a directional manner
+                    edge_key = (word_q_id, word_p_id)  # Maintain directionality
                     if edge_key in word_pair_weights:
-                        word_pair_weights[edge_key].append(pos_weight)
+                        word_pair_weights[edge_key] += pos_weight  # Sum occurrences
                     else:
-                        word_pair_weights[edge_key] = [pos_weight]
-                    
-                    # Create reverse edge (p -> q)
-                    rev_edge_key = (word_p_id, word_q_id)
-                    if rev_edge_key in word_pair_weights:
-                        word_pair_weights[rev_edge_key].append(pos_weight)
-                    else:
-                        word_pair_weights[rev_edge_key] = [pos_weight]
-        
-        # Create final edges and weights
-        word_word_edges = []
-        edge_weights = []
-        
-        for (word1_idx, word2_idx), weights in word_pair_weights.items():
+                        word_pair_weights[edge_key] = pos_weight
+
+        # Convert word pair occurrences into final edge tensors
+        word_word_edges, edge_weights = [], []
+
+        for (word1_idx, word2_idx), weight in word_pair_weights.items():
             word_word_edges.append([word1_idx, word2_idx])
-            # Average the weights for multiple occurrences
-            edge_weights.append(sum(weights) / len(weights))
-        
+            edge_weights.append(weight)  # Use summed weights
+
+        # Store edges in PyTorch Geometric HeteroData format
         if word_word_edges:  # Check if we have any edges
             data['word', 'co_occurs', 'word'].edge_index = torch.tensor(
-                word_word_edges
+                word_word_edges, dtype=torch.long
             ).t()
             data['word', 'co_occurs', 'word'].edge_attr = torch.tensor(
-                edge_weights
-            ).float()
+                edge_weights, dtype=torch.float
+            )
         
         # Initialize empty sentence edges and weights
         data['sentence', 'related_to', 'sentence'].edge_index = torch.empty((2, 0), dtype=torch.long)
@@ -273,18 +258,14 @@ class GraphBuilder:
                         j
                     )
                     sentence_edge_weights.append(weight)
-                    
-                    # Reverse edge (j -> i) with same weight
-                    sentence_edges.append([j, i])
-                    sentence_edge_weights.append(weight)
             
             if sentence_edges:  # Check if we have any edges
                 data['sentence', 'related_to', 'sentence'].edge_index = torch.tensor(
-                    sentence_edges
+                    sentence_edges, dtype=torch.long
                 ).t()
                 data['sentence', 'related_to', 'sentence'].edge_attr = torch.tensor(
-                    sentence_edge_weights
-                ).float()
+                    sentence_edge_weights, dtype=torch.float
+                )
         
         return data
 

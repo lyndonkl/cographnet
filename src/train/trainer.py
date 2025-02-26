@@ -42,7 +42,7 @@ class CoGraphTrainer:
         # Training components
         self.criterion = nn.CrossEntropyLoss(weight=self.class_weights)
         self.optimizer = Adam(model.parameters(), lr=learning_rate)
-        self.scheduler = ReduceLROnPlateau(self.optimizer, mode='min', patience=3, factor=0.5, verbose=True)
+        self.scheduler = ReduceLROnPlateau(self.optimizer, mode='min', patience=5, factor=0.5, min_lr=1e-5, verbose=True)
         
         # Tracking
         self.best_val_loss = float('inf')
@@ -96,15 +96,13 @@ class CoGraphTrainer:
                 
                 # Forward pass
                 outputs = self.model(batch)  # Should be [batch_size, num_classes]
-                print("Raw Logits:", outputs[:5])  # Should have different values
-                print("Softmax Probabilities:", torch.softmax(outputs[:5], dim=1))
-                print("Predicted Classes:", outputs.argmax(dim=1)[:5])
-                print("True Labels:", batch.y[:5])
                 
                 loss = self.criterion(outputs[:batch_size], batch.y[:batch_size])
                 
                 # Backward pass
                 loss.backward()
+
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
                 
                 # Update metrics
                 total_loss += loss.item() * batch_size
