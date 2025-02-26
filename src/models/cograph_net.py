@@ -1,4 +1,6 @@
+import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from .word_model import WordGraphModel
 from .sentence_model import SentenceGraphModel
 from .layers.fusion import FeatureFusion
@@ -45,6 +47,7 @@ class CoGraphNet(nn.Module):
         
         # Classification head
         self.classifier = nn.Sequential(
+            nn.LayerNorm(output_dim),  # Normalize before classification
             nn.Linear(output_dim, hidden_dim),
             nn.ReLU(),
             nn.Dropout(0.1),
@@ -66,24 +69,31 @@ class CoGraphNet(nn.Module):
                 - sentence.edge_attr: Sentence edge weights
                 - sentence.batch: Sentence batch indices
         """
+        # Handle missing components
+        word_x = data['word'].x if 'word' in data else torch.zeros_like(data['sentence'].x)
+        sentence_x = data['sentence'].x if 'sentence' in data else torch.zeros_like(data['word'].x)
+
         # Process word graph
         word_out = self.word_model(
-            data['word'].x,
-            data['word', 'co_occurs', 'word'].edge_index,
-            data['word', 'co_occurs', 'word'].edge_attr,
-            data['word'].batch  # Pass batch indices
+            word_x,
+            data.get(('word', 'co_occurs', 'word'), {}).get('edge_index', torch.empty(2, 0, dtype=torch.long)),
+            data.get(('word', 'co_occurs', 'word'), {}).get('edge_attr', torch.empty(0, dtype=torch.float)),
+            data.get('word', {}).get('batch', torch.zeros(word_x.size(0), dtype=torch.long))
         )
-        
+
+        # Process sentence graph
         sentence_out = self.sentence_model(
-            data['sentence'].x,
-            data['sentence', 'related_to', 'sentence'].edge_index,
-            data['sentence', 'related_to', 'sentence'].edge_attr,
-            data['sentence'].batch  # Pass batch indices
+            sentence_x,
+            data.get(('sentence', 'related_to', 'sentence'), {}).get('edge_index', torch.empty(2, 0, dtype=torch.long)),
+            data.get(('sentence', 'related_to', 'sentence'), {}).get('edge_attr', torch.empty(0, dtype=torch.float)),
+            data.get('sentence', {}).get('batch', torch.zeros(sentence_x.size(0), dtype=torch.long))
         )
-        
+
+        # Feature fusion
         fused = self.fusion(word_out, sentence_out)
+        fused = F.dropout(fused, p=0.2, training=self.training)  # Dropout before classification
         
         # Final classification
         outputs = self.classifier(fused)
         
-        return outputs 
+        return outputs
