@@ -3,42 +3,50 @@ import torch.nn as nn
 import torch.nn.functional as F
 from .layers.sentence.readout import SentenceReadout
 from .layers.sentence.graph_prop import SentenceGraphProp
+from torch_geometric.nn import GATConv
 
 class SentenceGraphModel(nn.Module):
-    """Sentence-level graph processing model with BiGRU and SwiGLU activation."""
+    """Sentence-level graph neural network with BiGRU and SwiGLU activation."""
     
     def __init__(
         self,
         input_dim: int,
         hidden_dim: int,
-        output_dim: int
+        output_dim: int,
+        num_layers: int = 3
     ):
         super().__init__()
-        
-        # Initial projection
-        self.input_proj = nn.Linear(input_dim, hidden_dim)
-        
-        # BiGRU for sentence processing
-        self.bigru = nn.GRU(
-            hidden_dim, 
-            hidden_dim // 2,  # Half size because bidirectional will double it
-            bidirectional=True,
-            batch_first=True
-        )
-        
-        # SwiGLU components
+
         self.w = nn.Linear(hidden_dim, hidden_dim)
         self.v = nn.Linear(hidden_dim, hidden_dim)
         
-        # Graph propagation layer
-        self.graph_prop = SentenceGraphProp(hidden_dim)
+        # Initial projection to hidden dimension
+        self.input_proj = nn.Linear(input_dim, hidden_dim)
         
-        # Readout
+        # Multiple BiGRU layers
+        self.bigru_layers = nn.ModuleList([
+            nn.GRU(
+                input_size=hidden_dim,
+                hidden_size=hidden_dim // 2,  # Half size for bidirectional
+                bidirectional=True,
+                batch_first=True
+            ) for _ in range(num_layers)
+        ])
+        
+        # Graph attention and convolution layers
+        self.layers = nn.ModuleList([
+            nn.ModuleDict({
+                'attention': GATConv(hidden_dim, hidden_dim),
+                'gnn': SentenceGraphProp(hidden_dim)
+            }) for _ in range(num_layers)
+        ])
+        
+        # Readout layer
         self.readout = SentenceReadout(hidden_dim)
         
         # Final projection
         self.output_proj = nn.Linear(hidden_dim * 2, output_dim)
-        
+
     def swiglu(self, x: torch.Tensor) -> torch.Tensor:
         """SwiGLU activation: x * sigmoid(beta * x)"""
         return self.w(x) * F.silu(self.v(x))
@@ -54,14 +62,15 @@ class SentenceGraphModel(nn.Module):
         # Initial projection
         x = self.input_proj(x)
         
-        # BiGRU processing
-        x, _ = self.bigru(x)
+        # Process through BiGRU layers
+        for bigru in self.bigru_layers:
+            x, _ = bigru(x)
+            x = self.swiglu(x)
         
-        # Apply SwiGLU activation
-        x = self.swiglu(x)
-        
-        # Graph propagation using edge weights
-        x = x + self.graph_prop(x, edge_index, edge_weight)  # Residual connection
+        # Process through GNN layers
+        for layer in self.layers:
+            attended = layer['attention'](x, edge_index, edge_weight)
+            x = layer['gnn'](attended, edge_index, edge_weight)
         
         # Readout to get graph-level representation
         x = self.readout(x, batch)

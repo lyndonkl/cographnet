@@ -14,10 +14,41 @@ from .distributed import setup_distributed, cleanup_distributed
 from .training_utils import EarlyStopping, ModelCheckpoint
 from .utils import setup_logger
 
+
+from sklearn.utils.class_weight import compute_class_weight
+import numpy as np
+
 # Suppress specific warnings
 warnings.filterwarnings("ignore", category=urllib3.exceptions.InsecureRequestWarning)
 warnings.filterwarnings("ignore", message="You are using `torch.load` with `weights_only=False`")
-warnings.filterwarnings("ignore", category=UserWarning)  # Suppresses PyTorch UserWarnings
+warnings.filterwarnings("ignore", category=UserWarning)
+
+def compute_class_weights(train_loader, num_classes, device, rank, world_size):
+    """Compute class weights from the training dataset (only on rank 0)."""
+    if rank == 0:
+        all_labels = []
+
+        # Collect all labels from dataset
+        for batch in train_loader:
+            all_labels.append(batch.y.cpu().numpy())  # Convert to numpy
+
+        # Flatten all collected labels
+        all_labels = np.concatenate(all_labels, axis=0)
+
+        # Compute class weights
+        class_weights = compute_class_weight(
+            class_weight="balanced",
+            classes=np.arange(num_classes),
+            y=all_labels
+        )
+
+        # Convert to tensor
+        class_weights = torch.tensor(class_weights, dtype=torch.float, device=device)
+    else:
+        # Placeholder tensor for other ranks
+        class_weights = torch.zeros(num_classes, dtype=torch.float, device=device)
+
+    return class_weights # Suppresses PyTorch UserWarnings
 
 def train_distributed(rank: int, world_size: int, args):
     """Distributed training function."""
@@ -43,7 +74,8 @@ def train_distributed(rank: int, world_size: int, args):
             hidden_dim=args.hidden_dim,
             output_dim=args.output_dim,
             num_classes=num_classes,
-            num_word_layers=args.num_word_layers
+            num_word_layers=args.num_word_layers*2,
+            num_sentence_layers=args.num_word_layers*2
         )
         
         model = DistributedDataParallel(model)
@@ -54,6 +86,21 @@ def train_distributed(rank: int, world_size: int, args):
             os.path.join(args.save_dir, 'best_model.pt'),
             monitor='val_loss'
         )
+
+        # Compute class weights only on rank 0
+        class_weights = compute_class_weights(
+            train_loader,
+            num_classes,
+            device="cuda" if torch.cuda.is_available() else "cpu",
+            rank=rank,
+            world_size=world_size
+        )
+
+        # Broadcast class weights to all ranks
+        if world_size > 1:
+            dist.broadcast(class_weights, src=0)
+            torch.distributed.barrier()  # Sync all ranks before continuing
+
         
         # Create trainer
         trainer = CoGraphTrainer(
@@ -64,7 +111,8 @@ def train_distributed(rank: int, world_size: int, args):
             learning_rate=args.learning_rate,
             rank=rank,
             world_size=world_size,
-            num_epochs=args.epochs
+            num_epochs=args.epochs,
+            class_weights=class_weights
         )
         
         # Train
@@ -79,7 +127,7 @@ def train_distributed(rank: int, world_size: int, args):
             val_loss, val_acc = trainer.validate()
             torch.distributed.barrier()
             
-            trainer.scheduler.step()
+            trainer.scheduler.step(val_loss)
             torch.distributed.barrier()
             
             # Save checkpoints and log on rank 0

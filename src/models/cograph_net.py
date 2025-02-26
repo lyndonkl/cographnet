@@ -19,7 +19,8 @@ class CoGraphNet(nn.Module):
         hidden_dim: int,
         output_dim: int,
         num_classes: int,
-        num_word_layers: int = 3  # Number of word graph layers
+        num_word_layers: int = 3,
+        num_sentence_layers: int = 3
     ):
         super().__init__()
         
@@ -35,7 +36,8 @@ class CoGraphNet(nn.Module):
         self.sentence_model = SentenceGraphModel(
             input_dim=input_dim,
             hidden_dim=hidden_dim,
-            output_dim=output_dim
+            output_dim=output_dim,
+            num_layers=num_sentence_layers
         )
         
         # Feature fusion - learns to combine word and sentence representations
@@ -64,12 +66,6 @@ class CoGraphNet(nn.Module):
                 - sentence.edge_attr: Sentence edge weights
                 - sentence.batch: Sentence batch indices
         """
-        print("\nCoGraphNet Forward Pass Shapes:")
-        print(f"Input word features shape: {data['word'].x.shape}")
-        print(f"Input word edge_index shape: {data['word', 'co_occurs', 'word'].edge_index.shape}")
-        print(f"Input word edge_attr shape: {data['word', 'co_occurs', 'word'].edge_attr.shape}")
-        print(f"Input word batch shape: {data['word'].batch.shape}")
-        
         # Process word graph
         word_out = self.word_model(
             data['word'].x,
@@ -77,13 +73,6 @@ class CoGraphNet(nn.Module):
             data['word', 'co_occurs', 'word'].edge_attr,
             data['word'].batch  # Pass batch indices
         )
-        print(f"Word model output shape: {word_out.shape}")
-        
-        # Process sentence graph
-        print(f"\nInput sentence features shape: {data['sentence'].x.shape}")
-        print(f"Input sentence edge_index shape: {data['sentence', 'related_to', 'sentence'].edge_index.shape}")
-        print(f"Input sentence edge_attr shape: {data['sentence', 'related_to', 'sentence'].edge_attr.shape}")
-        print(f"Input sentence batch shape: {data['sentence'].batch.shape}")
         
         sentence_out = self.sentence_model(
             data['sentence'].x,
@@ -91,19 +80,10 @@ class CoGraphNet(nn.Module):
             data['sentence', 'related_to', 'sentence'].edge_attr,
             data['sentence'].batch  # Pass batch indices
         )
-        print(f"Sentence model output shape: {sentence_out.shape}")
-        
-        # Fuse features
-        print("\nBefore fusion:")
-        print(f"Word features shape: {word_out.shape}")
-        print(f"Sentence features shape: {sentence_out.shape}")
         
         fused = self.fusion(word_out, sentence_out)
-        print(f"After fusion shape: {fused.shape}")
         
         # Final classification
         outputs = self.classifier(fused)
-        print(f"Final output shape: {outputs.shape}")
-        print(f"Target shape: {data.y.shape}\n")
         
         return outputs 

@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 import torch.distributed as dist
 from torch.optim import Adam
-from torch.optim.lr_scheduler import StepLR
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from ..models import CoGraphNet
@@ -22,12 +22,14 @@ class CoGraphTrainer:
         learning_rate: float = 1e-3,
         rank: int = 0,
         world_size: int = 1,
-        num_epochs: int = 100
+        num_epochs: int = 100,
+        class_weights: Optional[torch.Tensor] = None
     ):
         self.logger = setup_logger()
         self.rank = rank
         self.world_size = world_size
         self.num_epochs = num_epochs
+        self.class_weights = class_weights
         
         # Model
         self.model = model
@@ -38,9 +40,9 @@ class CoGraphTrainer:
         self.test_loader = test_loader
         
         # Training components
-        self.criterion = nn.CrossEntropyLoss()
+        self.criterion = nn.CrossEntropyLoss(weight=self.class_weights)
         self.optimizer = Adam(model.parameters(), lr=learning_rate)
-        self.scheduler = StepLR(self.optimizer, step_size=1, gamma=0.9)
+        self.scheduler = ReduceLROnPlateau(self.optimizer, mode='min', patience=3, factor=0.5, verbose=True)
         
         # Tracking
         self.best_val_loss = float('inf')
@@ -84,33 +86,25 @@ class CoGraphTrainer:
             total=len(self.train_loader)  # Explicitly set total
         ) as pbar:
             for batch_idx, batch in enumerate(pbar):
-                print(f"\nBatch {batch_idx} shapes:")
-                print(f"Batch type: {type(batch)}")
-                print(f"Batch keys: {batch.keys()}")
-                print(f"Word features shape: {batch['word'].x.shape}")
-                print(f"Word batch indices shape: {batch['word'].batch.shape}")
-                print(f"Sentence features shape: {batch['sentence'].x.shape}")
-                print(f"Sentence batch indices shape: {batch['sentence'].batch.shape}")
-                print(f"Target shape before device: {batch.y.shape}")
                 
                 batch = batch.to(self.device)
+                batch.y = batch.y.to(torch.long)
                 batch_size = batch.y.size(0)
-                print(f"Batch size from target: {batch_size}")
                 
                 # Zero gradients
                 self.optimizer.zero_grad()
                 
                 # Forward pass
                 outputs = self.model(batch)  # Should be [batch_size, num_classes]
-                print(f"Model output shape: {outputs.shape}")
-                print(f"Target shape: {batch.y.shape}")
+                print("Raw Logits:", outputs[:5])  # Should have different values
+                print("Softmax Probabilities:", torch.softmax(outputs[:5], dim=1))
+                print("Predicted Classes:", outputs.argmax(dim=1)[:5])
+                print("True Labels:", batch.y[:5])
                 
                 loss = self.criterion(outputs[:batch_size], batch.y[:batch_size])
-                print(f"Loss value: {loss.item():.4f}")
                 
                 # Backward pass
                 loss.backward()
-                self.optimizer.step()
                 
                 # Update metrics
                 total_loss += loss.item() * batch_size
@@ -144,7 +138,7 @@ class CoGraphTrainer:
                 loss = self.criterion(outputs[:batch_size], batch.y[:batch_size])
                 
                 # Calculate accuracy
-                pred = outputs[:batch_size].argmax(dim=1)
+                pred = torch.softmax(outputs[:batch_size], dim=1).argmax(dim=1)
                 correct += pred.eq(batch.y[:batch_size]).sum().item()
                 
                 # Update metrics
@@ -175,7 +169,7 @@ class CoGraphTrainer:
                 loss = self.criterion(outputs[:batch_size], batch.y[:batch_size])
                 
                 # Calculate accuracy
-                pred = outputs[:batch_size].argmax(dim=1)
+                pred = torch.softmax(outputs[:batch_size], dim=1).argmax(dim=1)
                 correct += pred.eq(batch.y[:batch_size]).sum().item()
                 
                 # Update metrics
@@ -188,36 +182,6 @@ class CoGraphTrainer:
         )
         
         return total_loss / total_samples, correct / total_samples
-    
-    def train(self, num_epochs: int, save_path: str = 'checkpoints'):
-        os.makedirs(save_path, exist_ok=True)
-        
-        for epoch in range(num_epochs):
-            # Train
-            train_loss = self.train_epoch(epoch)
-            
-            # Validate
-            val_loss, val_acc = self.validate_epoch()
-            
-            # Log progress
-            self.logger.info(
-                f'Epoch {epoch}: '
-                f'Train Loss: {train_loss:.4f}, '
-                f'Val Loss: {val_loss:.4f}, '
-                f'Val Acc: {val_acc:.4f}'
-            )
-            
-            # Save best model
-            if val_loss < self.best_val_loss:
-                self.best_val_loss = val_loss
-                torch.save(
-                    self.model.state_dict(),
-                    os.path.join(save_path, 'best_model.pt')
-                )
-                self.logger.info(f'New best model saved at epoch {epoch}')
-            
-            # Update learning rate
-            self.scheduler.step()
         
         # Final test if test loader provided
         if self.test_loader:
