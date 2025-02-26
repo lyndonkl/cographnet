@@ -88,6 +88,12 @@ def train_distributed(rank: int, world_size: int, args):
             num_word_layers=args.num_word_layers*2,
             num_sentence_layers=args.num_word_layers*2
         )
+
+        # Determine the device for training
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        # Move model to the correct device
+        model.to(device)
         
         model = DistributedDataParallel(model)
         
