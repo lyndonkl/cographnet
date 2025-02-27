@@ -77,6 +77,9 @@ class CoGraphTrainer:
         self.model.train()
         total_loss = 0
         total_samples = 0
+
+        accumulation_steps = 4  # Number of steps to accumulate gradients before updating
+        accumulated_loss = 0  # Track accumulated loss
         
         
         with tqdm(
@@ -98,15 +101,38 @@ class CoGraphTrainer:
                 outputs = self.model(batch)  # Should be [batch_size, num_classes]
                 
                 loss = self.criterion(outputs[:batch_size], batch.y[:batch_size])
+                loss = loss / accumulation_steps  # Scale loss for accumulation
                 
                 # Backward pass
                 loss.backward()
 
+                # Accumulate loss for tracking
+                accumulated_loss += loss.item() * batch_size
+                total_samples += batch_size
+
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
                 
-                # Update metrics
-                total_loss += loss.item() * batch_size
-                total_samples += batch_size
+                # Perform optimizer step only every `accumulation_steps`
+                if (batch_idx + 1) % accumulation_steps == 0 or (batch_idx + 1) == len(self.train_loader):
+                    torch.distributed.barrier()  # Ensure all processes reach this point before reducing gradients
+
+                    # Synchronize gradients across processes
+                    for param in self.model.parameters():
+                        if param.grad is not None:
+                            torch.distributed.all_reduce(param.grad, op=torch.distributed.ReduceOp.SUM)
+                            param.grad /= self.world_size  # Average gradients across all processes
+
+                    torch.distributed.barrier()  # Ensure all processes complete reduction before updating
+
+                    self.optimizer.step()
+                    self.optimizer.zero_grad()  # Clear accumulated gradients
+
+                    # Accumulate loss across all processes
+                    loss_tensor = torch.tensor([accumulated_loss], device=self.device)
+                    torch.distributed.all_reduce(loss_tensor, op=torch.distributed.ReduceOp.SUM)
+                    total_loss += loss_tensor.item()  # Accumulate the reduced loss
+
+                    accumulated_loss = 0  # Reset accumulated loss after step
                 
                 if self.rank == 0:
                     pbar.set_postfix({
