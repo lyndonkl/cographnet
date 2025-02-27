@@ -69,24 +69,35 @@ class CoGraphNet(nn.Module):
                 - sentence.edge_attr: Sentence edge weights
                 - sentence.batch: Sentence batch indices
         """
-        # Handle missing components
-        word_x = data['word'].x if 'word' in data else torch.zeros_like(data['sentence'].x)
-        sentence_x = data['sentence'].x if 'sentence' in data else torch.zeros_like(data['word'].x)
+        # Extract node features directly
+        word_x = data['word'].x
+        sentence_x = data['sentence'].x
+
+        # Extract batch indices directly
+        word_batch = data['word'].batch
+        sentence_batch = data['sentence'].batch
+
+        # Extract edge indices and attributes directly
+        word_edge_index = data[('word', 'co_occurs', 'word')].edge_index
+        word_edge_attr = data[('word', 'co_occurs', 'word')].edge_attr
+
+        sentence_edge_index = data[('sentence', 'related_to', 'sentence')].edge_index
+        sentence_edge_attr = data[('sentence', 'related_to', 'sentence')].edge_attr
 
         # Process word graph
         word_out = self.word_model(
             word_x,
-            data.get(('word', 'co_occurs', 'word'), {}).get('edge_index', torch.empty(2, 0, dtype=torch.long)),
-            data.get(('word', 'co_occurs', 'word'), {}).get('edge_attr', torch.empty(0, dtype=torch.float)),
-            data.get('word', {}).get('batch', torch.zeros(word_x.size(0), dtype=torch.long))
+            word_edge_index,
+            word_edge_attr,
+            word_batch
         )
 
         # Process sentence graph
         sentence_out = self.sentence_model(
             sentence_x,
-            data.get(('sentence', 'related_to', 'sentence'), {}).get('edge_index', torch.empty(2, 0, dtype=torch.long)),
-            data.get(('sentence', 'related_to', 'sentence'), {}).get('edge_attr', torch.empty(0, dtype=torch.float)),
-            data.get('sentence', {}).get('batch', torch.zeros(sentence_x.size(0), dtype=torch.long))
+            sentence_edge_index,
+            sentence_edge_attr,
+            sentence_batch
         )
 
         # Feature fusion

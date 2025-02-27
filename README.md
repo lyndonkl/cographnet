@@ -31,6 +31,8 @@ conda activate cographnet
 
 # Install PyG using pip (required for Apple Silicon)
 pip install torch-geometric
+pip install transformers
+
 ```
 
 ## Usage
