@@ -14,6 +14,6 @@ class FeatureFusion(nn.Module):
 
     def forward(self, word_features: torch.Tensor, sentence_features: torch.Tensor) -> torch.Tensor:
         fused = (self.alpha1 * word_features + self.alpha2 * sentence_features) / 2
-        fused = self.w(fused) * F.silu(self.v(fused))
+        fused = self.w(fused) * torch.clamp(F.silu(self.v(fused)), min=-10, max=10)
         fused = self.dropout(fused)  # Dropout applied before classification
         return fused

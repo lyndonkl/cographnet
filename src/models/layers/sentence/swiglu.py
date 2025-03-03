@@ -11,4 +11,4 @@ class SwiGLU(nn.Module):
         self.v = nn.Linear(hidden_dim, hidden_dim)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.w(x) * F.silu(self.v(x))
+        return self.w(x) * torch.clamp(F.silu(self.v(x)), min=-10, max=10)

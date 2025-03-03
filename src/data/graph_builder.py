@@ -317,11 +317,13 @@ class GraphBuilder:
 
         # Store word embeddings
         data['word'].x = word_embeddings
+        data['word'].x = F.normalize(data['word'].x, p=2, dim=1)
         
         sentence_embeddings, sentences = self.get_sentence_embeddings(doc_text, self.tokenizer, self.bert)
 
         # Store sentence embeddings in PyTorch Geometric format
         data['sentence'].x = sentence_embeddings
+        data['sentence'].x = F.normalize(data['sentence'].x, p=2, dim=1)
         
         # Create sliding windows
         windows = []
@@ -366,12 +368,15 @@ class GraphBuilder:
 
         # Store edges in PyTorch Geometric HeteroData format
         if word_word_edges:  # Check if we have any edges
+            edge_weights = torch.tensor(edge_weights, dtype=torch.float)
+            mean = edge_weights.mean()
+            std = edge_weights.std() + 1e-8  # Avoid division by zero
+            edge_weights = (edge_weights - mean) / std
+
             data['word', 'co_occurs', 'word'].edge_index = torch.tensor(
                 word_word_edges, dtype=torch.long
             ).t()
-            data['word', 'co_occurs', 'word'].edge_attr = torch.tensor(
-                edge_weights, dtype=torch.float
-            )
+            data['word', 'co_occurs', 'word'].edge_attr = edge_weights
         
         # Initialize empty sentence edges and weights
         data['sentence', 'related_to', 'sentence'].edge_index = torch.empty((2, 0), dtype=torch.long)
@@ -395,12 +400,15 @@ class GraphBuilder:
                     sentence_edge_weights.append(weight)
             
             if sentence_edges:  # Check if we have any edges
+                sentence_edge_attr = torch.tensor(sentence_edge_weights, dtype=torch.float)
+                mean = sentence_edge_attr.mean()
+                std = sentence_edge_attr.std() + 1e-8
+                sentence_edge_attr = (sentence_edge_attr - mean) / std  # Standardization
+
                 data['sentence', 'related_to', 'sentence'].edge_index = torch.tensor(
                     sentence_edges, dtype=torch.long
                 ).t()
-                data['sentence', 'related_to', 'sentence'].edge_attr = torch.tensor(
-                    sentence_edge_weights, dtype=torch.float
-                )
+                data['sentence', 'related_to', 'sentence'].edge_attr = sentence_edge_attr
         
         return data
 

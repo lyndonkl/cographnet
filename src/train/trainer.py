@@ -78,7 +78,7 @@ class CoGraphTrainer:
         total_loss = 0
         total_samples = 0
 
-        accumulation_steps = 4  # Number of steps to accumulate gradients before updating
+        accumulation_steps = 8  # Number of steps to accumulate gradients before updating
         accumulated_loss = 0  # Track accumulated loss
         
         
@@ -116,14 +116,6 @@ class CoGraphTrainer:
                 if (batch_idx + 1) % accumulation_steps == 0 or (batch_idx + 1) == len(self.train_loader):
                     torch.distributed.barrier()  # Ensure all processes reach this point before reducing gradients
 
-                    # Synchronize gradients across processes
-                    for param in self.model.parameters():
-                        if param.grad is not None:
-                            torch.distributed.all_reduce(param.grad, op=torch.distributed.ReduceOp.SUM)
-                            param.grad /= self.world_size  # Average gradients across all processes
-
-                    torch.distributed.barrier()  # Ensure all processes complete reduction before updating
-
                     self.optimizer.step()
                     self.optimizer.zero_grad()  # Clear accumulated gradients
 
@@ -131,6 +123,8 @@ class CoGraphTrainer:
                     loss_tensor = torch.tensor([accumulated_loss], device=self.device)
                     torch.distributed.all_reduce(loss_tensor, op=torch.distributed.ReduceOp.SUM)
                     total_loss += loss_tensor.item()  # Accumulate the reduced loss
+
+                    torch.distributed.barrier()
 
                     accumulated_loss = 0  # Reset accumulated loss after step
                 

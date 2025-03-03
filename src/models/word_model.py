@@ -21,10 +21,10 @@ class WordGraphModel(nn.Module):
 
         self.input_proj = nn.Linear(input_dim, hidden_dim)
         self.dropout = nn.Dropout(0.2)
-        self.layer_norm = nn.LayerNorm(hidden_dim)
+        self.layer_norm = nn.LayerNorm(hidden_dim, eps=1e-6)
 
         self.gru_layers = nn.ModuleList([
-            nn.GRU(hidden_dim, hidden_dim, batch_first=True)
+            nn.GRU(hidden_dim, hidden_dim, batch_first=True, dropout=0.2)
             for _ in range(num_layers)
         ])
 

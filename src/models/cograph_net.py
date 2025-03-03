@@ -4,6 +4,7 @@ import torch.nn.functional as F
 from .word_model import WordGraphModel
 from .sentence_model import SentenceGraphModel
 from .layers.fusion import FeatureFusion
+from torch_geometric.nn import GatedGraphConv
 
 class CoGraphNet(nn.Module):
     """
@@ -53,6 +54,33 @@ class CoGraphNet(nn.Module):
             nn.Dropout(0.1),
             nn.Linear(hidden_dim, num_classes)
         )
+
+        self._init_weights()
+    
+    def _init_weights(self):
+        """Apply weight initialization."""
+        for module in self.modules():
+            if isinstance(module, nn.Linear):  # Initialize Linear layers
+                nn.init.xavier_uniform_(module.weight)  # Good for deep networks
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)  # Bias = 0 for stability
+
+            elif isinstance(module, nn.GRU):  # Initialize GRU layers
+                for name, param in module.named_parameters():
+                    if 'weight' in name:
+                        nn.init.xavier_uniform_(param)
+                    elif 'bias' in name:
+                        nn.init.zeros_(param)
+
+            elif isinstance(module, nn.Embedding):  # Initialize Embedding layers if present
+                nn.init.xavier_uniform_(module.weight)
+
+            elif isinstance(module, GatedGraphConv):  # Handle Gated Graph Convolution
+                for name, param in module.named_parameters():
+                    if 'weight' in name:
+                        nn.init.xavier_uniform_(param)  # Xavier Uniform for stability
+                    elif 'bias' in name:
+                        nn.init.zeros_(param)
     
     def forward(self, data):
         """

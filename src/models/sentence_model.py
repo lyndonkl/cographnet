@@ -20,7 +20,7 @@ class SentenceGraphModel(nn.Module):
         # Initial projection to hidden dimension
         self.input_proj = nn.Linear(input_dim, hidden_dim)
         self.dropout = nn.Dropout(0.2)
-        self.layer_norm = nn.LayerNorm(hidden_dim)
+        self.layer_norm = nn.LayerNorm(hidden_dim, eps=1e-6)
 
         # Multiple BiGRU layers
         self.bigru_layers = nn.ModuleList([
