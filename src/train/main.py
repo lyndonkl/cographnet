@@ -23,6 +23,7 @@ import numpy as np
 warnings.filterwarnings("ignore", category=urllib3.exceptions.InsecureRequestWarning)
 warnings.filterwarnings("ignore", message="You are using `torch.load` with `weights_only=False`")
 warnings.filterwarnings("ignore", category=UserWarning)
+mp.set_start_method('spawn', force=True)
 
 def compute_class_weights(train_loader, num_classes, device, rank, world_size):
     """Compute class weights across all ranks in DistributedDataParallel (DDP), ensuring proper synchronization."""
@@ -99,7 +100,9 @@ def train_distributed(rank: int, world_size: int, args):
             batch_size=args.batch_size,
             num_workers=4,
             world_size=world_size,
-            rank=rank
+            rank=rank,
+            n_splits=5,
+            current_fold=rank % 5
         )
         
         # Create model
@@ -221,7 +224,7 @@ def main():
     parser.add_argument('--input_dim', type=int, required=True)
     parser.add_argument('--hidden_dim', type=int, default=256)
     parser.add_argument('--output_dim', type=int, default=128)
-    parser.add_argument('--num_word_layers', type=int, default=3)
+    parser.add_argument('--num_word_layers', type=int, default=8)
     parser.add_argument('--learning_rate', type=float, default=1e-3)
     parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--patience', type=int, default=7)
