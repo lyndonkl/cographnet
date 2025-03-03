@@ -133,13 +133,17 @@ class DocumentGraphDataset(Dataset):
             
             # Combine all indices
             self.valid_indices = sorted(sum(all_indices, []))
+
+        # Ensure all processes reach this point before saving metadata
+        if world_size > 1:
+            torch.distributed.barrier()
         
         # Save metadata (only from main process)
         if rank == 0:
             print(f"Saving metadata with {len(self.valid_indices)} valid documents")
             metadata_path = Path(self.processed_dir) / 'metadata.pt'
             torch.save(self.valid_indices, metadata_path)
-        
+
         # Final barrier to ensure metadata is saved before any process proceeds
         if world_size > 1:
             torch.distributed.barrier()
@@ -234,21 +238,24 @@ def create_dataloaders(
         train_dataset,
         batch_size=batch_size,
         sampler=train_sampler,
-        num_workers=num_workers
+        num_workers=num_workers,
+        pin_memory=True
     )
     
     val_loader = DataLoader(
         val_dataset,
         batch_size=batch_size,
         sampler=val_sampler,
-        num_workers=num_workers
+        num_workers=num_workers,
+        pin_memory=True
     )
     
     test_loader = DataLoader(
         test_dataset,
         batch_size=batch_size,
         sampler=test_sampler,
-        num_workers=num_workers
+        num_workers=num_workers,
+        pin_memory=True
     )
     
     return train_loader, val_loader, test_loader, num_classes 

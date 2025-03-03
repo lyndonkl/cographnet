@@ -11,6 +11,7 @@ from tqdm import tqdm
 from ..models import CoGraphNet
 from .metrics import calculate_metrics
 from .utils import setup_logger
+from .focal_loss import FocalLoss
 
 class CoGraphTrainer:
     def __init__(
@@ -40,9 +41,9 @@ class CoGraphTrainer:
         self.test_loader = test_loader
         
         # Training components
-        self.criterion = nn.CrossEntropyLoss(weight=self.class_weights)
+        self.criterion = FocalLoss(gamma=2.0, weight=self.class_weights)
         self.optimizer = Adam(model.parameters(), lr=learning_rate)
-        self.scheduler = ReduceLROnPlateau(self.optimizer, mode='min', patience=3, factor=0.5, verbose=True)
+        self.scheduler = ReduceLROnPlateau(self.optimizer, mode='min', patience=5, factor=0.5, min_lr=5e-2, verbose=True)
         
         # Tracking
         self.best_val_loss = float('inf')
@@ -77,6 +78,9 @@ class CoGraphTrainer:
         self.model.train()
         total_loss = 0
         total_samples = 0
+
+        accumulation_steps = 8  # Number of steps to accumulate gradients before updating
+        accumulated_loss = 0  # Track accumulated loss
         
         
         with tqdm(
@@ -91,24 +95,36 @@ class CoGraphTrainer:
                 batch.y = batch.y.to(torch.long)
                 batch_size = batch.y.size(0)
                 
-                # Zero gradients
-                self.optimizer.zero_grad()
-                
                 # Forward pass
                 outputs = self.model(batch)  # Should be [batch_size, num_classes]
-                print("Raw Logits:", outputs[:5])  # Should have different values
-                print("Softmax Probabilities:", torch.softmax(outputs[:5], dim=1))
-                print("Predicted Classes:", outputs.argmax(dim=1)[:5])
-                print("True Labels:", batch.y[:5])
                 
                 loss = self.criterion(outputs[:batch_size], batch.y[:batch_size])
+                loss = loss / accumulation_steps  # Scale loss for accumulation
                 
                 # Backward pass
                 loss.backward()
-                
-                # Update metrics
-                total_loss += loss.item() * batch_size
+
+                # Accumulate loss for tracking
+                accumulated_loss += loss.item()
                 total_samples += batch_size
+
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                
+                # Perform optimizer step only every `accumulation_steps`
+                if (batch_idx + 1) % accumulation_steps == 0 or (batch_idx + 1) == len(self.train_loader):
+                    torch.distributed.barrier()  # Ensure all processes reach this point before reducing gradients
+
+                    self.optimizer.step()
+                    self.optimizer.zero_grad()  # Clear accumulated gradients
+
+                    # Accumulate loss across all processes
+                    loss_tensor = torch.tensor([accumulated_loss], device=self.device)
+                    torch.distributed.all_reduce(loss_tensor, op=torch.distributed.ReduceOp.SUM)
+                    total_loss += loss_tensor.item()  # Accumulate the reduced loss
+
+                    torch.distributed.barrier()
+
+                    accumulated_loss = 0  # Reset accumulated loss after step
                 
                 if self.rank == 0:
                     pbar.set_postfix({

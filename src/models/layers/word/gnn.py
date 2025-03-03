@@ -1,22 +1,13 @@
 import torch
 import torch.nn as nn
-from torch_geometric.nn import MessagePassing
+from torch_geometric.nn import GatedGraphConv
 
-class WordGNN(MessagePassing):
-    """Word-level graph neural network layer."""
+class WordGNN(nn.Module):
+    """Gated Graph Neural Network for word-level propagation."""
     
-    def __init__(self, hidden_dim: int):
-        super().__init__(aggr='add')  # Specify aggregation method
-        self.linear = nn.Linear(hidden_dim, hidden_dim)
-        
+    def __init__(self, hidden_dim: int, num_steps: int = 3):
+        super().__init__()
+        self.ggnn = GatedGraphConv(hidden_dim, num_steps)
+
     def forward(self, x: torch.Tensor, edge_index: torch.Tensor, edge_weight: torch.Tensor) -> torch.Tensor:
-        # Propagate messages along edges
-        return self.propagate(edge_index, x=x, edge_weight=edge_weight)
-    
-    def message(self, x_j: torch.Tensor, edge_weight: torch.Tensor) -> torch.Tensor:
-        # Weight messages by edge weights
-        return x_j * edge_weight.unsqueeze(-1)
-    
-    def update(self, aggr_out: torch.Tensor) -> torch.Tensor:
-        # Transform aggregated messages
-        return self.linear(aggr_out) 
+        return self.ggnn(x, edge_index, edge_weight)

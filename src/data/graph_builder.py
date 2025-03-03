@@ -3,20 +3,21 @@ import json
 from typing import List, Dict
 import torch
 from torch_geometric.data import HeteroData
-from transformers import BertTokenizer, BertModel
+from transformers import BertTokenizerFast, BertModel, pipeline
 from tqdm import tqdm
 import nltk
 from nltk.corpus import stopwords
 import os
 import ssl
-from nltk.tokenize import sent_tokenize  # Better sentence tokenization
+from collections import defaultdict
+import torch.nn.functional as F
 
 class GraphBuilder:
     def __init__(
         self, 
-        window_size: int = 3,
+        window_size: int = 5,
         alpha: float = 0.5,
-        bert_model: str = 'bert-base-uncased',
+        bert_model: str = 'dmis-lab/biobert-base-cased-v1.1',
         min_word_freq: int = 5
     ):
         """Initialize the graph builder with configuration parameters.
@@ -31,30 +32,34 @@ class GraphBuilder:
         os.environ['REQUESTS_CA_BUNDLE'] = ''
         os.environ['SSL_CERT_FILE'] = ''
         os.environ['CURL_CA_BUNDLE'] = ''
+        os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
         self.window_size = window_size
         self.alpha = alpha
         self.min_word_freq = min_word_freq
-        self.tokenizer = BertTokenizer.from_pretrained(bert_model)
-        self.bert = BertModel.from_pretrained(bert_model)
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # Automatically use GPU if available
+        self.tokenizer = BertTokenizerFast.from_pretrained(bert_model)
+        self.bert = BertModel.from_pretrained(bert_model).to(self.device)
         
         # Configure SSL verification at all levels
         os.environ['REQUESTS_CA_BUNDLE'] = '/Users/kdsouza/Documents/Projects/cacerts/ZscalerRoot.pem'
         os.environ['SSL_CERT_FILE'] = '/Users/kdsouza/Documents/Projects/cacerts/ZscalerRoot.pem'
         os.environ['CURL_CA_BUNDLE'] = '/Users/kdsouza/Documents/Projects/cacerts/ZscalerRoot.pem'
 
-        # Initialize stopwords with SSL verification disabled
-        try:
-            # Create unverified context for NLTK
-            ssl._create_default_https_context = ssl._create_unverified_context
-            nltk.download('stopwords', quiet=True)
-            self.stop_words = set(stopwords.words('english'))
-        except Exception as e:
-            print(f"Error downloading NLTK data: {e}")
-            # Fallback to a basic set of stopwords if download fails
-            self.stop_words = {'a', 'an', 'and', 'are', 'as', 'at', 'be', 'by', 'for',
-                             'from', 'has', 'he', 'in', 'is', 'it', 'its', 'of', 'on',
-                             'that', 'the', 'to', 'was', 'were', 'will', 'with'}
+        # Medical Stopword List (Better than NLTK's)
+        self.stop_words = {
+            "a", "about", "after", "again", "against", "all", "almost", "also", "although",
+            "among", "an", "and", "any", "are", "as", "at", "be", "because", "been", "before",
+            "being", "between", "both", "but", "by", "can", "could", "did", "do", "does", "doing",
+            "done", "due", "during", "each", "either", "few", "for", "from", "further", "had",
+            "has", "have", "having", "here", "how", "however", "if", "in", "into", "is", "it",
+            "its", "itself", "just", "may", "might", "more", "most", "must", "my", "nor", "not",
+            "now", "of", "on", "once", "only", "or", "other", "ought", "our", "out", "over",
+            "same", "should", "some", "such", "than", "that", "the", "their", "them", "then",
+            "there", "these", "they", "this", "those", "through", "thus", "to", "too", "under",
+            "until", "very", "was", "were", "what", "when", "where", "whether", "which", "while",
+            "who", "whom", "whose", "why", "will", "with", "within", "without", "would", "yet"
+        }
         
     def load_documents(self, json_files: List[Path]) -> List[Dict]:
         """Load documents from JSON files."""
@@ -86,24 +91,213 @@ class GraphBuilder:
     def _preprocess_document(self, document: str) -> str:
         """Preprocess document by removing stopwords and rare words."""
         # Count word frequencies
-        word_freq = {}
-        words = document.split()
-        for word in words:
-            word = word.lower().strip()
-            if word not in self.stop_words:
-                word_freq[word] = word_freq.get(word, 0) + 1
+        words = document.lower().split()
         
-        # Filter words based on frequency
+        # Remove only frequent stopwords, but keep rare words
         filtered_words = [
             word for word in words 
-            if word.lower() not in self.stop_words 
-            and word_freq.get(word.lower(), 0) >= self.min_word_freq
+            if word not in self.stop_words
         ]
-        
+
         if not filtered_words:
-            raise ValueError(f"Document has no words meeting minimum frequency threshold of {self.min_word_freq}")
-        
+            raise ValueError("Document is empty after preprocessing!")
+
         return ' '.join(filtered_words)
+
+    def get_word_embeddings(self, doc_text, tokenizer, model, max_length=512, stride=256):
+        """Computes word embeddings using a sliding window approach while preserving full-word mappings.
+
+        Args:
+            doc_text (str): Full text of the document.
+            tokenizer (BertTokenizerFast): Tokenizer instance.
+            model (BertModel): Pretrained BERT model.
+            max_length (int): Maximum number of tokens per chunk.
+            stride (int): Overlapping stride between chunks.
+
+        Returns:
+            torch.Tensor: Word embeddings.
+            dict: doc_word_id_map - Unique words mapped to indices.
+            list: ordered_words - List of words in original order (including duplicates).
+        """
+        # Tokenize document with offset mapping
+        encoded = tokenizer(
+            doc_text,
+            return_offsets_mapping=True,
+            return_tensors="pt",
+            padding=False,
+            truncation=False  # We manually handle chunking
+        )
+
+        input_ids = encoded["input_ids"][0]  
+        attention_mask = encoded["attention_mask"][0]
+        offset_mapping = encoded["offset_mapping"][0].tolist()
+
+        # Convert token IDs to words using offset mapping
+        word_to_token_indices = defaultdict(list)  # Map full words to their token indices
+        token_idx_to_word = {}  # Map each token index to its corresponding full word
+        full_tokens = tokenizer.convert_ids_to_tokens(input_ids)
+        
+        ordered_words = []  # Stores words in original order, including duplicates
+
+        # Build a correct mapping of words to token indices
+        reconstructed_word = ""
+        current_indices = []
+
+        for i, (start, end) in enumerate(offset_mapping):
+            if start == end:  # Skip special tokens like CLS, SEP
+                continue
+            
+            token = full_tokens[i]
+            
+            # If it's a subword (starts with ##), append to the previous part
+            if token.startswith("##"):
+                reconstructed_word += token[2:]  # Remove '##' and append
+            else:
+                # Store the last reconstructed word before starting a new one
+                if reconstructed_word:
+                    word_to_token_indices[reconstructed_word].extend(current_indices)
+                    ordered_words.append(reconstructed_word)
+
+                # Start a new word
+                reconstructed_word = token
+                current_indices = []
+
+            current_indices.append(i)  # Store token index
+            
+            # Map each token position back to the full word
+            token_idx_to_word[i] = reconstructed_word
+
+        # Store the last reconstructed word
+        if reconstructed_word:
+            word_to_token_indices[reconstructed_word].extend(current_indices)
+            ordered_words.append(reconstructed_word)
+
+        # Track word embeddings across chunks
+        word_embeddings = defaultdict(list)  # Collect embeddings for each word
+
+        # Create sliding windows
+        with torch.no_grad():
+            for start in range(0, len(input_ids), stride):
+                end = min(start + max_length, len(input_ids))
+
+                chunk_input_ids = input_ids[start:end].unsqueeze(0)
+                chunk_attention_mask = attention_mask[start:end].unsqueeze(0)
+
+                # Run through BERT
+                outputs = model(
+                    input_ids=chunk_input_ids.to(model.device),
+                    attention_mask=chunk_attention_mask.to(model.device)
+                )
+                chunk_embeddings = outputs.last_hidden_state[0]  # Shape: (chunk_length, hidden_dim)
+
+                # Assign embeddings to full words
+                for token_idx in range(start, end):
+                    word = token_idx_to_word.get(token_idx, None)
+                    if word and word in word_to_token_indices:
+                        word_embeddings[word].append(chunk_embeddings[token_idx - start])
+
+                if end == len(input_ids):  # Stop if we've processed the full text
+                    break
+
+        # Aggregate multiple embeddings per word (Mean Pooling)
+        final_word_embeddings = {}
+        for word, embeddings in word_embeddings.items():
+            final_word_embeddings[word] = torch.mean(torch.stack(embeddings), dim=0)
+
+        # Convert to tensor format for PyG
+        doc_vocab = list(final_word_embeddings.keys())
+        doc_word_id_map = {word: idx for idx, word in enumerate(doc_vocab)}
+
+        word_embedding_tensor = torch.zeros(len(doc_vocab), next(iter(final_word_embeddings.values())).size(-1))
+        for word, emb in final_word_embeddings.items():
+            word_embedding_tensor[doc_word_id_map[word]] = emb
+
+        # Normalize embeddings for stability
+        word_embedding_tensor = F.normalize(word_embedding_tensor, p=2, dim=1)
+
+        return word_embedding_tensor, doc_word_id_map, ordered_words
+
+    def get_sentence_embeddings(self, doc_text, tokenizer, model, max_length=512, stride=256):
+        """Computes sentence embeddings using BERT-based sentence splitting and a sliding window approach.
+
+        Args:
+            doc_text (str): Full document text.
+            tokenizer (BertTokenizerFast): Tokenizer instance.
+            model (BertModel): Pretrained BERT model.
+            max_length (int): Maximum number of tokens per chunk.
+            stride (int): Overlap between chunks.
+
+        Returns:
+            torch.Tensor: Sentence embeddings.
+            List[str]: Extracted sentences.
+        """
+        # Use BERT tokenizer to split sentences
+        encoded = tokenizer(doc_text, return_offsets_mapping=True, truncation=False)
+        offsets = encoded['offset_mapping']
+        tokens = tokenizer.convert_ids_to_tokens(encoded['input_ids'])
+        
+        sentences = []
+        current_sentence = []
+        last_end = 0
+        
+        for i, (start, end) in enumerate(offsets):
+            if start == 0 and end == 0:
+                continue  # Skip special tokens
+            
+            token_text = doc_text[start:end]
+            current_sentence.append(token_text)
+            
+            # Use punctuation as a heuristic for sentence boundaries
+            if token_text in {'.', '!', '?'}:
+                sentence_text = " ".join(current_sentence).strip()
+                sentences.append(sentence_text)
+                current_sentence = []
+            
+            last_end = end
+        
+        if current_sentence:
+            sentences.append(" ".join(current_sentence).strip())  # Append the last sentence
+        
+        sentence_embeddings = []
+        
+        # Compute embeddings for each sentence
+        with torch.no_grad():
+            for sentence in sentences:
+                encoded = tokenizer(
+                    sentence,
+                    return_tensors="pt",
+                    padding=False,
+                    truncation=False  # Manually handle chunking
+                )
+                
+                input_ids = encoded["input_ids"][0]
+                attention_mask = encoded["attention_mask"][0]
+                
+                chunk_embeddings = []
+                for start in range(0, len(input_ids), stride):
+                    end = min(start + max_length, len(input_ids))
+                    
+                    chunk_input_ids = input_ids[start:end].unsqueeze(0)
+                    chunk_attention_mask = attention_mask[start:end].unsqueeze(0)
+                    
+                    # Run through BERT
+                    outputs = model(
+                        input_ids=chunk_input_ids.to(model.device),
+                        attention_mask=chunk_attention_mask.to(model.device)
+                    )
+                    chunk_embedding = outputs.last_hidden_state[:, 0, :]  # CLS token embedding
+                    
+                    chunk_embeddings.append(chunk_embedding)
+                    
+                    if end == len(input_ids):  # Stop if we've reached the full sentence
+                        break
+                
+                # Aggregate chunks (Mean Pooling)
+                sentence_embedding = torch.mean(torch.stack(chunk_embeddings), dim=0)
+                sentence_embeddings.append(sentence_embedding.squeeze(0))
+        
+        return torch.stack(sentence_embeddings), sentences
+
 
     def build_graph(self, text: str) -> HeteroData:
         """Build a heterogeneous graph from document text."""
@@ -119,77 +313,17 @@ class GraphBuilder:
         # Create HeteroData object
         data = HeteroData()
         
-        # Get BERT embeddings for the whole text first
-        text_inputs = self.tokenizer(
-            doc_text,
-            padding=True,
-            truncation=True,
-            return_tensors='pt'
-        )
-
-        with torch.no_grad():
-            outputs = self.bert(**text_inputs)
-            # Get the full contextual embeddings
-            full_embeddings = outputs.last_hidden_state[0]  # Shape: (num_tokens, hidden_dim)
-
-        # Tokenized version of the full document (WordPiece tokens)
-        full_tokens = self.tokenizer.convert_ids_to_tokens(text_inputs["input_ids"][0])
-
-        # Create word nodes with contextual embeddings
-        doc_words = doc_text.split()
-        doc_vocab = list(set(doc_words))  # Unique words in document
-        doc_word_id_map = {word: idx for idx, word in enumerate(doc_vocab)}  # Preserve mapping
-
-        # Initialize word embeddings tensor
-        word_embeddings = torch.zeros(len(doc_vocab), full_embeddings.size(-1))
-
-        # Process each unique word
-        for word in doc_vocab:
-            # Tokenize the word using BERT's tokenizer (WordPiece tokenization)
-            word_tokens = self.tokenizer.tokenize(word)
-            if not word_tokens:
-                continue
-            
-            # Find matching token positions in the full document's tokenized output
-            token_indices = [i for i, token in enumerate(full_tokens) if token in word_tokens]
-
-            if not token_indices:  # Skip if word tokens were not found
-                continue
-
-            # Extract and average embeddings of matched subwords
-            word_emb = full_embeddings[token_indices].mean(dim=0)  # Mean pooling
-
-            # Store the embedding in the tensor using doc_word_id_map
-            word_embeddings[doc_word_id_map[word]] = word_emb
+        word_embeddings, doc_word_id_map, doc_words = self.get_word_embeddings(doc_text, self.tokenizer, self.bert)
 
         # Store word embeddings
         data['word'].x = word_embeddings
+        data['word'].x = F.normalize(data['word'].x, p=2, dim=1)
         
-        # Tokenize text into sentences
-        sentences = sent_tokenize(doc_text)
-        sentence_embeddings = []
+        sentence_embeddings, sentences = self.get_sentence_embeddings(doc_text, self.tokenizer, self.bert)
 
-        for sentence in sentences:
-            # Tokenize the sentence and convert to input tensor
-            sent_inputs = self.tokenizer(
-                sentence,
-                padding=True,
-                truncation=True,
-                return_tensors='pt'
-            )
-
-            with torch.no_grad():
-                sent_outputs = self.bert(**sent_inputs)
-                token_embeddings = sent_outputs.last_hidden_state  # Shape: (batch_size, seq_len, hidden_dim)
-
-                ## Use [CLS] Token for Sentence Embedding
-                sent_emb = token_embeddings[:, 0, :]  # Extract [CLS] token embedding
-
-                # Store the sentence embedding
-                sentence_embeddings.append(sent_emb.squeeze(0))
-
-        # Stack sentence embeddings into a tensor
-        data['sentence'].x = torch.stack(sentence_embeddings)
+        # Store sentence embeddings in PyTorch Geometric format
+        data['sentence'].x = sentence_embeddings
+        data['sentence'].x = F.normalize(data['sentence'].x, p=2, dim=1)
         
         # Create sliding windows
         windows = []
@@ -205,53 +339,44 @@ class GraphBuilder:
         
         # Process each window
         for window in windows:
-            for p in range(1, len(window)):
+            L = len(window)  # Window length
+            for p in range(1, L):
                 for q in range(0, p):
-                    word_p = window[p]
-                    word_q = window[q]
-                    
-                    # Get word indices from the unique word mapping
-                    word_p_id = doc_word_id_map[word_p]
-                    word_q_id = doc_word_id_map[word_q]
-                    
-                    if word_p_id == word_q_id:
+                    word_p, word_q = window[p], window[q]
+                    word_p_id, word_q_id = doc_word_id_map[word_p], doc_word_id_map[word_q]
+
+                    if word_p_id == word_q_id:  # Avoid self-loops
                         continue
-                    
-                    # Calculate positional weight
+
+                    # Compute positional weight
                     rho = q
-                    L = len(window)
-                    pos_weight = (self.alpha * (rho/L)) + ((1 - self.alpha) * ((L - rho)/L))
-                    
-                    # Create forward edge (q -> p)
-                    edge_key = (word_q_id, word_p_id)
+                    pos_weight = (self.alpha * (rho / L)) + ((1 - self.alpha) * ((L - rho) / L))
+
+                    # Store weight in a directional manner
+                    edge_key = (word_q_id, word_p_id)  # Maintain directionality
                     if edge_key in word_pair_weights:
-                        word_pair_weights[edge_key].append(pos_weight)
+                        word_pair_weights[edge_key] += pos_weight  # Sum occurrences
                     else:
-                        word_pair_weights[edge_key] = [pos_weight]
-                    
-                    # Create reverse edge (p -> q)
-                    rev_edge_key = (word_p_id, word_q_id)
-                    if rev_edge_key in word_pair_weights:
-                        word_pair_weights[rev_edge_key].append(pos_weight)
-                    else:
-                        word_pair_weights[rev_edge_key] = [pos_weight]
-        
-        # Create final edges and weights
-        word_word_edges = []
-        edge_weights = []
-        
-        for (word1_idx, word2_idx), weights in word_pair_weights.items():
+                        word_pair_weights[edge_key] = pos_weight
+
+        # Convert word pair occurrences into final edge tensors
+        word_word_edges, edge_weights = [], []
+
+        for (word1_idx, word2_idx), weight in word_pair_weights.items():
             word_word_edges.append([word1_idx, word2_idx])
-            # Average the weights for multiple occurrences
-            edge_weights.append(sum(weights) / len(weights))
-        
+            edge_weights.append(weight)  # Use summed weights
+
+        # Store edges in PyTorch Geometric HeteroData format
         if word_word_edges:  # Check if we have any edges
+            edge_weights = torch.tensor(edge_weights, dtype=torch.float)
+            mean = edge_weights.mean()
+            std = edge_weights.std() + 1e-8  # Avoid division by zero
+            edge_weights = (edge_weights - mean) / std
+
             data['word', 'co_occurs', 'word'].edge_index = torch.tensor(
-                word_word_edges
+                word_word_edges, dtype=torch.long
             ).t()
-            data['word', 'co_occurs', 'word'].edge_attr = torch.tensor(
-                edge_weights
-            ).float()
+            data['word', 'co_occurs', 'word'].edge_attr = edge_weights
         
         # Initialize empty sentence edges and weights
         data['sentence', 'related_to', 'sentence'].edge_index = torch.empty((2, 0), dtype=torch.long)
@@ -273,18 +398,17 @@ class GraphBuilder:
                         j
                     )
                     sentence_edge_weights.append(weight)
-                    
-                    # Reverse edge (j -> i) with same weight
-                    sentence_edges.append([j, i])
-                    sentence_edge_weights.append(weight)
             
             if sentence_edges:  # Check if we have any edges
+                sentence_edge_attr = torch.tensor(sentence_edge_weights, dtype=torch.float)
+                mean = sentence_edge_attr.mean()
+                std = sentence_edge_attr.std() + 1e-8
+                sentence_edge_attr = (sentence_edge_attr - mean) / std  # Standardization
+
                 data['sentence', 'related_to', 'sentence'].edge_index = torch.tensor(
-                    sentence_edges
+                    sentence_edges, dtype=torch.long
                 ).t()
-                data['sentence', 'related_to', 'sentence'].edge_attr = torch.tensor(
-                    sentence_edge_weights
-                ).float()
+                data['sentence', 'related_to', 'sentence'].edge_attr = sentence_edge_attr
         
         return data
 

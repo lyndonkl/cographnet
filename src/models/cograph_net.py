@@ -1,7 +1,10 @@
+import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from .word_model import WordGraphModel
 from .sentence_model import SentenceGraphModel
 from .layers.fusion import FeatureFusion
+from torch_geometric.nn import GatedGraphConv
 
 class CoGraphNet(nn.Module):
     """
@@ -45,11 +48,39 @@ class CoGraphNet(nn.Module):
         
         # Classification head
         self.classifier = nn.Sequential(
+            nn.LayerNorm(output_dim),  # Normalize before classification
             nn.Linear(output_dim, hidden_dim),
             nn.ReLU(),
             nn.Dropout(0.1),
             nn.Linear(hidden_dim, num_classes)
         )
+
+        self._init_weights()
+    
+    def _init_weights(self):
+        """Apply weight initialization."""
+        for module in self.modules():
+            if isinstance(module, nn.Linear):  # Initialize Linear layers
+                nn.init.xavier_uniform_(module.weight)  # Good for deep networks
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)  # Bias = 0 for stability
+
+            elif isinstance(module, nn.GRU):  # Initialize GRU layers
+                for name, param in module.named_parameters():
+                    if 'weight' in name:
+                        nn.init.xavier_uniform_(param)
+                    elif 'bias' in name:
+                        nn.init.zeros_(param)
+
+            elif isinstance(module, nn.Embedding):  # Initialize Embedding layers if present
+                nn.init.xavier_uniform_(module.weight)
+
+            elif isinstance(module, GatedGraphConv):  # Handle Gated Graph Convolution
+                for name, param in module.named_parameters():
+                    if 'weight' in name:
+                        nn.init.xavier_uniform_(param)  # Xavier Uniform for stability
+                    elif 'bias' in name:
+                        nn.init.zeros_(param)
     
     def forward(self, data):
         """
@@ -66,24 +97,42 @@ class CoGraphNet(nn.Module):
                 - sentence.edge_attr: Sentence edge weights
                 - sentence.batch: Sentence batch indices
         """
+        # Extract node features directly
+        word_x = data['word'].x
+        sentence_x = data['sentence'].x
+
+        # Extract batch indices directly
+        word_batch = data['word'].batch
+        sentence_batch = data['sentence'].batch
+
+        # Extract edge indices and attributes directly
+        word_edge_index = data[('word', 'co_occurs', 'word')].edge_index
+        word_edge_attr = data[('word', 'co_occurs', 'word')].edge_attr
+
+        sentence_edge_index = data[('sentence', 'related_to', 'sentence')].edge_index
+        sentence_edge_attr = data[('sentence', 'related_to', 'sentence')].edge_attr
+
         # Process word graph
         word_out = self.word_model(
-            data['word'].x,
-            data['word', 'co_occurs', 'word'].edge_index,
-            data['word', 'co_occurs', 'word'].edge_attr,
-            data['word'].batch  # Pass batch indices
+            word_x,
+            word_edge_index,
+            word_edge_attr,
+            word_batch
         )
-        
+
+        # Process sentence graph
         sentence_out = self.sentence_model(
-            data['sentence'].x,
-            data['sentence', 'related_to', 'sentence'].edge_index,
-            data['sentence', 'related_to', 'sentence'].edge_attr,
-            data['sentence'].batch  # Pass batch indices
+            sentence_x,
+            sentence_edge_index,
+            sentence_edge_attr,
+            sentence_batch
         )
-        
+
+        # Feature fusion
         fused = self.fusion(word_out, sentence_out)
+        fused = F.dropout(fused, p=0.2, training=self.training)  # Dropout before classification
         
         # Final classification
         outputs = self.classifier(fused)
         
-        return outputs 
+        return outputs

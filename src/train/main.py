@@ -13,6 +13,7 @@ from .trainer import CoGraphTrainer
 from .distributed import setup_distributed, cleanup_distributed
 from .training_utils import EarlyStopping, ModelCheckpoint
 from .utils import setup_logger
+import torch.distributed as dist
 
 
 from sklearn.utils.class_weight import compute_class_weight
@@ -24,31 +25,64 @@ warnings.filterwarnings("ignore", message="You are using `torch.load` with `weig
 warnings.filterwarnings("ignore", category=UserWarning)
 
 def compute_class_weights(train_loader, num_classes, device, rank, world_size):
-    """Compute class weights from the training dataset (only on rank 0)."""
+    """Compute class weights across all ranks in DistributedDataParallel (DDP), ensuring proper synchronization."""
+
+    # Ensure all processes start at the same point
+    dist.barrier()
+
+    # Collect all labels locally
+    local_labels = []
+    for batch in train_loader:
+        local_labels.append(batch.y.cpu().numpy())  # Store labels from the current rank
+
+    # Flatten and convert to tensor
+    local_labels = np.concatenate(local_labels, axis=0) if local_labels else np.array([], dtype=np.int64)
+    local_labels_tensor = torch.tensor(local_labels, dtype=torch.long, device=device)
+
+    # Allocate a list to store gathered tensors
+    gathered_labels_list = [torch.zeros_like(local_labels_tensor) for _ in range(world_size)]
+
+    # Synchronize and gather all labels from all ranks
+    dist.barrier()
+    dist.all_gather(gathered_labels_list, local_labels_tensor)
+
+    # Convert gathered tensors to numpy arrays
+    all_labels = torch.cat(gathered_labels_list, dim=0).cpu().numpy()
+    # Ensure all ranks wait for gathering to complete
+    dist.barrier()
+
     if rank == 0:
-        all_labels = []
-
-        # Collect all labels from dataset
-        for batch in train_loader:
-            all_labels.append(batch.y.cpu().numpy())  # Convert to numpy
-
-        # Flatten all collected labels
-        all_labels = np.concatenate(all_labels, axis=0)
-
-        # Compute class weights
-        class_weights = compute_class_weight(
+        # Compute class weights using all gathered labels
+        unique_labels = np.unique(all_labels)
+        computed_weights = compute_class_weight(
             class_weight="balanced",
-            classes=np.arange(num_classes),
+            classes=unique_labels,
             y=all_labels
         )
 
-        # Convert to tensor
-        class_weights = torch.tensor(class_weights, dtype=torch.float, device=device)
+        # Initialize full weight tensor with zeros
+        full_class_weights = np.zeros(num_classes)
+        
+        # Assign computed weights to their respective indices
+        for label, weight in zip(unique_labels, computed_weights):
+            full_class_weights[label] = weight  
+
+        # Convert to tensor and send to the correct device
+        class_weights_tensor = torch.tensor(full_class_weights, dtype=torch.float, device=device)
     else:
         # Placeholder tensor for other ranks
-        class_weights = torch.zeros(num_classes, dtype=torch.float, device=device)
+        class_weights_tensor = torch.zeros(num_classes, dtype=torch.float, device=device)
 
-    return class_weights # Suppresses PyTorch UserWarnings
+    # Synchronize before broadcasting
+    dist.barrier()
+
+    # Broadcast the computed weights from rank 0 to all other ranks
+    dist.broadcast(class_weights_tensor, src=0)
+
+    # Final synchronization to ensure all ranks have the same weights
+    dist.barrier()
+
+    return class_weights_tensor
 
 def train_distributed(rank: int, world_size: int, args):
     """Distributed training function."""
@@ -77,6 +111,12 @@ def train_distributed(rank: int, world_size: int, args):
             num_word_layers=args.num_word_layers*2,
             num_sentence_layers=args.num_word_layers*2
         )
+
+        # Determine the device for training
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        # Move model to the correct device
+        model.to(device)
         
         model = DistributedDataParallel(model)
         
