@@ -95,9 +95,6 @@ class CoGraphTrainer:
                 batch.y = batch.y.to(torch.long)
                 batch_size = batch.y.size(0)
                 
-                # Zero gradients
-                self.optimizer.zero_grad()
-                
                 # Forward pass
                 outputs = self.model(batch)  # Should be [batch_size, num_classes]
                 
@@ -108,7 +105,7 @@ class CoGraphTrainer:
                 loss.backward()
 
                 # Accumulate loss for tracking
-                accumulated_loss += loss.item() * batch_size
+                accumulated_loss += loss.item()
                 total_samples += batch_size
 
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
