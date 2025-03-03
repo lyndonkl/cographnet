@@ -45,4 +45,7 @@ body {
 }
 
 /* Import our IntroCard styles */
-@import './cards/IntroCard.css'; 
+@import './cards/IntroCard.css';
+
+/* Import shared styles */
+@import './shared.css'; 
