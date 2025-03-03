@@ -11,6 +11,7 @@ from tqdm import tqdm
 from ..models import CoGraphNet
 from .metrics import calculate_metrics
 from .utils import setup_logger
+from .focal_loss import FocalLoss
 
 class CoGraphTrainer:
     def __init__(
@@ -40,9 +41,9 @@ class CoGraphTrainer:
         self.test_loader = test_loader
         
         # Training components
-        self.criterion = nn.CrossEntropyLoss(weight=self.class_weights)
+        self.criterion = FocalLoss(gamma=2.0, weight=self.class_weights)
         self.optimizer = Adam(model.parameters(), lr=learning_rate)
-        self.scheduler = ReduceLROnPlateau(self.optimizer, mode='min', patience=5, factor=0.5, min_lr=1e-5, verbose=True)
+        self.scheduler = ReduceLROnPlateau(self.optimizer, mode='min', patience=5, factor=0.5, min_lr=5e-2, verbose=True)
         
         # Tracking
         self.best_val_loss = float('inf')
