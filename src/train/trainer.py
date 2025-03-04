@@ -79,7 +79,7 @@ class CoGraphTrainer:
         total_loss = 0
         total_samples = 0
 
-        accumulation_steps = 8  # Number of steps to accumulate gradients before updating
+        accumulation_steps = 128  # Number of steps to accumulate gradients before updating
         accumulated_loss = 0  # Track accumulated loss
         
         
@@ -158,7 +158,7 @@ class CoGraphTrainer:
                 correct += pred.eq(batch.y[:batch_size]).sum().item()
                 
                 # Update metrics
-                total_loss += loss.item() * batch_size
+                total_loss += loss.item()
                 total_samples += batch_size
         
         # Gather metrics from all processes
