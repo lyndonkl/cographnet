@@ -23,10 +23,7 @@ class WordGraphModel(nn.Module):
         self.dropout = nn.Dropout(0.2)
         self.layer_norm = nn.LayerNorm(hidden_dim, eps=1e-6)
 
-        self.gru_layers = nn.ModuleList([
-            nn.GRU(hidden_dim, hidden_dim, batch_first=True, dropout=0.2)
-            for _ in range(num_layers)
-        ])
+        self.gru = nn.GRU(hidden_dim, hidden_dim, batch_first=True, dropout=0.2, num_layers=num_layers)
 
         self.swiglu = SwiGLU(hidden_dim)
 
@@ -45,9 +42,8 @@ class WordGraphModel(nn.Module):
         x = self.dropout(x)
         x = self.layer_norm(x)
 
-        for gru in self.gru_layers:
-            x, _ = gru(x)
-            x = self.swiglu(x)
+        x, _ = self.gru(x)
+        x = self.swiglu(x)
 
         for layer in self.layers:
             attended = layer['attention'](x, edge_index, edge_weight)

@@ -1,0 +1,2 @@
+Best Parameters: {'learning_rate': 0.05, 'batch_size': 8, 'hidden_dim': 64, 'output_dim': 64, 'num_word_layers': 12, 'num_sentence_layers': 4, 'scheduler_patience': 3, 'scheduler_factor': 0.1}
+Best Parameters: {'learning_rate': 0.05, 'batch_size': 8, 'hidden_dim': 128, 'output_dim': 64, 'num_word_layers': 2, 'num_sentence_layers': 2, 'scheduler_patience': 3, 'scheduler_factor': 0.1}

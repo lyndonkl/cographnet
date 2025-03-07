@@ -176,7 +176,9 @@ def get_all_categories(train_dir: str, val_dir: str, test_dir: str) -> Set[str]:
         for file in Path(data_dir).glob('*.json'):
             with open(file, 'r', encoding='utf-8') as f:
                 doc = json.load(f)
-                categories.add(doc['category'])
+                if 'text' in doc and 'category' in doc and doc['text'].strip() and doc['category'].strip():
+                    categories.add(doc['category'])
+
     return categories
 
 def create_dataloaders(
