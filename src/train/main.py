@@ -182,16 +182,16 @@ def train_distributed(rank: int, world_size: int, args):
             
             if epoch == 0:
                 trainer.freeze_all_except_sentence()
-                reset_learning_rate(trainer, args.learning_rate)
+                trainer.optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, trainer.model.parameters()), lr=1e-5)
             elif epoch == 25:
                 trainer.freeze_all_except_word()
-                reset_learning_rate(trainer, args.learning_rate)
+                trainer.optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, trainer.model.parameters()), lr=1e-5)
             elif epoch == 50:
                 trainer.freeze_all_except_fusion()
-                reset_learning_rate(trainer, args.learning_rate)
+                trainer.optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, trainer.model.parameters()), lr=5e-3)
             elif epoch == 75:
                 trainer.unfreeze_all()
-                reset_learning_rate(trainer, args.learning_rate)
+                trainer.optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, trainer.model.parameters()), lr=5e-3)
 
             # Set epoch for distributed sampling
             train_loader.sampler.set_epoch(epoch)
@@ -203,8 +203,9 @@ def train_distributed(rank: int, world_size: int, args):
             val_loss, val_acc = trainer.validate()
             torch.distributed.barrier()
             
-            trainer.scheduler.step(val_loss)
-            torch.distributed.barrier()
+            if stage in ["fusion", "fine_tune"]:
+                trainer.scheduler.step(val_loss)
+                torch.distributed.barrier()
             
             # Save checkpoints and log on rank 0
             if rank == 0:
@@ -265,7 +266,7 @@ def main():
     parser.add_argument('--hidden_dim', type=int, default=256)
     parser.add_argument('--output_dim', type=int, default=128)
     parser.add_argument('--num_word_layers', type=int, default=5)
-    parser.add_argument('--learning_rate', type=float, default=1e-4)
+    parser.add_argument('--learning_rate', type=float, default=1e-5)
     parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--patience', type=int, default=20)
     args = parser.parse_args()
