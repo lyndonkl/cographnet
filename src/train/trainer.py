@@ -73,13 +73,55 @@ class CoGraphTrainer:
         total_correct = sum(c.item() for c in all_corrects)
         
         return total_loss, total_samples, total_correct
+    
+    def freeze_all_except_sentence(self):
+        """Freeze all layers except the Sentence Model."""
+        for param in self.model.module.word_model.parameters():
+            param.requires_grad = False
+        for param in self.model.module.fusion.parameters():
+            param.requires_grad = False
+        for param in self.model.module.sentence_model.parameters():
+            param.requires_grad = True
+        for param in self.model.module.classifier.parameters():
+            param.requires_grad = True
+        self.logger.info("Training Sentence Model only.")
+
+    def freeze_all_except_word(self):
+        """Freeze all layers except the Word Model."""
+        for param in self.model.module.sentence_model.parameters():
+            param.requires_grad = False
+        for param in self.model.module.fusion.parameters():
+            param.requires_grad = False
+        for param in self.model.module.word_model.parameters():
+            param.requires_grad = True
+        for param in self.model.module.classifier.parameters():
+            param.requires_grad = True
+        self.logger.info("Training Word Model only.")
+
+    def freeze_all_except_fusion(self):
+        """Freeze all layers except the Fusion Layer."""
+        for param in self.model.module.word_model.parameters():
+            param.requires_grad = False
+        for param in self.model.module.sentence_model.parameters():
+            param.requires_grad = False
+        for param in self.model.module.fusion.parameters():
+            param.requires_grad = True
+        for param in self.model.module.classifier.parameters():
+            param.requires_grad = True
+        self.logger.info("Training Fusion Layer only.")
+
+    def unfreeze_all(self):
+        """Unfreeze all layers for fine-tuning."""
+        for param in self.model.module.parameters():
+            param.requires_grad = True
+        self.logger.info("Fine-tuning all layers.")
         
     def train_epoch(self, epoch: int) -> float:
         self.model.train()
         total_loss = 0
         total_samples = 0
 
-        accumulation_steps = 128  # Number of steps to accumulate gradients before updating
+        accumulation_steps = 16  # Number of steps to accumulate gradients before updating
         accumulated_loss = 0  # Track accumulated loss
         
         

@@ -85,6 +85,23 @@ def compute_class_weights(train_loader, num_classes, device, rank, world_size):
 
     return class_weights_tensor
 
+def get_training_stage(epoch):
+    if epoch < 25:
+        return "sentence"
+    elif epoch < 50:
+        return "word"
+    elif epoch < 75:
+        return "fusion"
+    else:
+        return "fine_tune"
+
+def reset_learning_rate(trainer, new_lr):
+    """Manually reset learning rate when transitioning to a new training stage."""
+    for param_group in trainer.optimizer.param_groups:
+        param_group['lr'] = new_lr
+    trainer.logger.info(f"Learning rate reset to {new_lr} for new training stage.")
+
+
 def train_distributed(rank: int, world_size: int, args):
     """Distributed training function."""
     logger = setup_logger()
@@ -108,11 +125,11 @@ def train_distributed(rank: int, world_size: int, args):
         # Create model
         model = CoGraphNet(
             input_dim=args.input_dim,
-            hidden_dim=args.hidden_dim,
-            output_dim=args.output_dim,
+            hidden_dim=128,
+            output_dim=64,
             num_classes=num_classes,
-            num_word_layers=args.num_word_layers*2,
-            num_sentence_layers=args.num_word_layers*2
+            num_word_layers=12,
+            num_sentence_layers=4
         )
 
         # Determine the device for training
@@ -121,15 +138,16 @@ def train_distributed(rank: int, world_size: int, args):
         # Move model to the correct device
         model.to(device)
         
-        model = DistributedDataParallel(model)
+        model = DistributedDataParallel(model, find_unused_parameters=True)
         
         # Setup training utilities
-        early_stopping = EarlyStopping(patience=args.patience)
         checkpoint = ModelCheckpoint(
             os.path.join(args.save_dir, 'best_model.pt'),
             monitor='val_loss'
         )
 
+        patience_per_stage = {"sentence": 10, "word": 10, "fusion": 5, "fine_tune": 5}
+        early_stopping = {stage: EarlyStopping(patience=patience) for stage, patience in patience_per_stage.items()} 
         # Compute class weights only on rank 0
         class_weights = compute_class_weights(
             train_loader,
@@ -160,6 +178,21 @@ def train_distributed(rank: int, world_size: int, args):
         
         # Train
         for epoch in range(args.epochs):
+            stage = get_training_stage(epoch)
+            
+            if epoch == 0:
+                trainer.freeze_all_except_sentence()
+                reset_learning_rate(trainer, args.learning_rate)
+            elif epoch == 25:
+                trainer.freeze_all_except_word()
+                reset_learning_rate(trainer, args.learning_rate)
+            elif epoch == 50:
+                trainer.freeze_all_except_fusion()
+                reset_learning_rate(trainer, args.learning_rate)
+            elif epoch == 75:
+                trainer.unfreeze_all()
+                reset_learning_rate(trainer, args.learning_rate)
+
             # Set epoch for distributed sampling
             train_loader.sampler.set_epoch(epoch)
             val_loader.sampler.set_epoch(epoch)
@@ -186,13 +219,20 @@ def train_distributed(rank: int, world_size: int, args):
                 )
             
             # Synchronize early stopping across processes
-            should_stop = torch.tensor([early_stopping(val_loss)], dtype=torch.bool)
+            should_stop = torch.tensor([early_stopping[stage](val_loss)], dtype=torch.bool)
             torch.distributed.broadcast(should_stop, src=0)
             
             if should_stop.item():
-                if rank == 0:
-                    logger.info(f"Early stopping triggered at epoch {epoch}")
-                break
+                if stage == "fine_tune":
+                    if rank == 0:
+                        logger.info(f"Early stopping triggered at epoch {epoch}. Ending training.")
+                    break
+                else:
+                    next_stage_start_epoch = 25 if stage == "sentence" else 50 if stage == "word" else 75
+                    if rank == 0:
+                        logger.info(f"Early stopping triggered for stage {stage} at epoch {epoch}. Moving to next stage {get_training_stage(next_stage_start_epoch)}.")
+                    epoch = next_stage_start_epoch - 1  # Move to next stage start
+                    continue
         
         torch.distributed.barrier()
         
@@ -225,9 +265,9 @@ def main():
     parser.add_argument('--hidden_dim', type=int, default=256)
     parser.add_argument('--output_dim', type=int, default=128)
     parser.add_argument('--num_word_layers', type=int, default=5)
-    parser.add_argument('--learning_rate', type=float, default=5e-2)
+    parser.add_argument('--learning_rate', type=float, default=1e-4)
     parser.add_argument('--epochs', type=int, default=100)
-    parser.add_argument('--patience', type=int, default=2)
+    parser.add_argument('--patience', type=int, default=20)
     args = parser.parse_args()
     
     # Create directories
