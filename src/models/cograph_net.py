@@ -20,7 +20,9 @@ class CoGraphNet(nn.Module):
         self,
         input_dim: int,
         hidden_dim: int,
-        output_dim: int,
+        word_output_dim: int,
+        sentence_output_dim: int,
+        fusion_output_dim: int,
         num_classes: int,
         num_word_layers: int = 3,
         num_sentence_layers: int = 3
@@ -31,7 +33,7 @@ class CoGraphNet(nn.Module):
         self.word_model = WordGraphModel(
             input_dim=input_dim,
             hidden_dim=hidden_dim,
-            output_dim=output_dim,
+            output_dim=word_output_dim,
             num_layers=num_word_layers
         )
         
@@ -39,17 +41,17 @@ class CoGraphNet(nn.Module):
         self.sentence_model = SentenceGraphModel(
             input_dim=input_dim,
             hidden_dim=hidden_dim,
-            output_dim=output_dim,
+            output_dim=sentence_output_dim,
             num_layers=num_sentence_layers
         )
         
         # Feature fusion - learns to combine word and sentence representations
-        self.fusion = FeatureFusion(hidden_dim=output_dim)
+        self.fusion = FeatureFusion(word_dim=word_output_dim, sentence_dim=sentence_output_dim, fusion_dim=fusion_output_dim)
         
         # Classification head
         self.classifier = nn.Sequential(
-            nn.LayerNorm(output_dim),  # Normalize before classification
-            nn.Linear(output_dim, hidden_dim),
+            nn.LayerNorm(fusion_output_dim),  # Normalize before classification
+            nn.Linear(fusion_output_dim, hidden_dim),
             nn.ReLU(),
             nn.Dropout(0.1),
             nn.Linear(hidden_dim, num_classes)

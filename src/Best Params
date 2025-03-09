@@ -1,2 +1,8 @@
 Best Parameters: {'learning_rate': 0.05, 'batch_size': 8, 'hidden_dim': 64, 'output_dim': 64, 'num_word_layers': 12, 'num_sentence_layers': 4, 'scheduler_patience': 3, 'scheduler_factor': 0.1}
 Best Parameters: {'learning_rate': 0.05, 'batch_size': 8, 'hidden_dim': 128, 'output_dim': 64, 'num_word_layers': 2, 'num_sentence_layers': 2, 'scheduler_patience': 3, 'scheduler_factor': 0.1}
+
+
+Best Sentence Model Params: {'learning_rate': 1e-05, 'batch_size': 8, 'hidden_dim': 128, 'output_dim': 128, 'num_sentence_layers': 4}, Accuracy: 0.2535211267605634
+Best Word Model Params: {'learning_rate': 1e-05, 'batch_size': 8, 'hidden_dim': 128, 'output_dim': 256, 'num_word_layers': 16}, Accuracy: 0.2112676056338028
+Best Fusion Model Params: {'learning_rate': 1e-05, 'batch_size': 8, 'hidden_dim': 128, 'output_dim': 64, 'scheduler_patience': 3, 'scheduler_factor': 0.1}, Accuracy: 0.18309859154929578
+Final Best Params Per Stage: {'word': {'learning_rate': 1e-05, 'batch_size': 8, 'hidden_dim': 128, 'output_dim': 256, 'num_word_layers': 16}, 'fusion': {'learning_rate': 1e-05, 'batch_size': 8, 'hidden_dim': 128, 'output_dim': 64, 'scheduler_patience': 3, 'scheduler_factor': 0.1}}
