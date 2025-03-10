@@ -86,11 +86,11 @@ def compute_class_weights(train_loader, num_classes, device, rank, world_size):
     return class_weights_tensor
 
 def get_training_stage(epoch):
-    if epoch < 25:
+    if epoch < 50:
         return "sentence"
-    elif epoch < 50:
+    elif epoch < 100:
         return "word"
-    elif epoch < 75:
+    elif epoch < 125:
         return "fusion"
     else:
         return "fine_tune"
@@ -179,19 +179,20 @@ def train_distributed(rank: int, world_size: int, args):
         )
         
         # Train
-        for epoch in range(args.epochs):
+        epoch = 0
+        while epoch < args.epochs:
             stage = get_training_stage(epoch)
             
             if epoch == 0:
                 trainer.freeze_all_except_sentence()
-                trainer.optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, trainer.model.parameters()), lr=1e-5)
-            elif epoch == 25:
-                trainer.freeze_all_except_word()
-                trainer.optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, trainer.model.parameters()), lr=1e-5)
+                trainer.optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, trainer.model.parameters()), lr=1e-4)
             elif epoch == 50:
+                trainer.freeze_all_except_word()
+                trainer.optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, trainer.model.parameters()), lr=1e-4)
+            elif epoch == 100:
                 trainer.freeze_all_except_fusion()
                 trainer.optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, trainer.model.parameters()), lr=5e-3)
-            elif epoch == 75:
+            elif epoch == 125:
                 trainer.unfreeze_all()
                 trainer.optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, trainer.model.parameters()), lr=5e-3)
 
@@ -231,7 +232,7 @@ def train_distributed(rank: int, world_size: int, args):
                         logger.info(f"Early stopping triggered at epoch {epoch}. Ending training.")
                     break
                 else:
-                    next_stage_start_epoch = 25 if stage == "sentence" else 50 if stage == "word" else 75
+                    next_stage_start_epoch = 50 if stage == "sentence" else 100 if stage == "word" else 125
                     if rank == 0:
                         logger.info(f"Early stopping triggered for stage {stage} at epoch {epoch}. Moving to next stage {get_training_stage(next_stage_start_epoch)}.")
                     epoch = next_stage_start_epoch - 1  # Move to next stage start
@@ -245,6 +246,8 @@ def train_distributed(rank: int, world_size: int, args):
         # Log results only on rank 0
         if rank == 0:
             logger.info(f"Test metrics: {test_metrics}")
+
+        epoch += 1
             
     except Exception as e:
         logger.error(f"Rank {rank} failed with error: {str(e)}")
@@ -269,7 +272,7 @@ def main():
     parser.add_argument('--output_dim', type=int, default=128)
     parser.add_argument('--num_word_layers', type=int, default=5)
     parser.add_argument('--learning_rate', type=float, default=1e-5)
-    parser.add_argument('--epochs', type=int, default=100)
+    parser.add_argument('--epochs', type=int, default=135)
     parser.add_argument('--patience', type=int, default=20)
     args = parser.parse_args()
     

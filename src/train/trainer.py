@@ -43,7 +43,7 @@ class CoGraphTrainer:
         # Training components
         self.criterion = FocalLoss(gamma=2.0, weight=self.class_weights)
         self.optimizer = Adam(model.parameters(), lr=learning_rate)
-        self.scheduler = ReduceLROnPlateau(self.optimizer, mode='min', patience=2, factor=0.5, min_lr=1e-5, verbose=True)
+        self.scheduler = ReduceLROnPlateau(self.optimizer, mode='min', patience=5, factor=0.5, min_lr=1e-5, verbose=True)
         
         # Tracking
         self.best_val_loss = float('inf')
@@ -121,7 +121,7 @@ class CoGraphTrainer:
         total_loss = 0
         total_samples = 0
 
-        accumulation_steps = 16  # Number of steps to accumulate gradients before updating
+        accumulation_steps = 8  # Number of steps to accumulate gradients before updating
         accumulated_loss = 0  # Track accumulated loss
         
         
