@@ -23,6 +23,7 @@ import numpy as np
 warnings.filterwarnings("ignore", category=urllib3.exceptions.InsecureRequestWarning)
 warnings.filterwarnings("ignore", message="You are using `torch.load` with `weights_only=False`")
 warnings.filterwarnings("ignore", category=UserWarning)
+mp.set_start_method('spawn', force=True)
 
 def compute_class_weights(train_loader, num_classes, device, rank, world_size):
     """Compute class weights across all ranks in DistributedDataParallel (DDP), ensuring proper synchronization."""
@@ -84,6 +85,23 @@ def compute_class_weights(train_loader, num_classes, device, rank, world_size):
 
     return class_weights_tensor
 
+def get_training_stage(epoch):
+    if epoch < 50:
+        return "sentence"
+    elif epoch < 100:
+        return "word"
+    elif epoch < 125:
+        return "fusion"
+    else:
+        return "fine_tune"
+
+def reset_learning_rate(trainer, new_lr):
+    """Manually reset learning rate when transitioning to a new training stage."""
+    for param_group in trainer.optimizer.param_groups:
+        param_group['lr'] = new_lr
+    trainer.logger.info(f"Learning rate reset to {new_lr} for new training stage.")
+
+
 def train_distributed(rank: int, world_size: int, args):
     """Distributed training function."""
     logger = setup_logger()
@@ -99,17 +117,21 @@ def train_distributed(rank: int, world_size: int, args):
             batch_size=args.batch_size,
             num_workers=4,
             world_size=world_size,
-            rank=rank
+            rank=rank,
+            n_splits=5,
+            current_fold=rank % 5
         )
         
         # Create model
         model = CoGraphNet(
             input_dim=args.input_dim,
-            hidden_dim=args.hidden_dim,
-            output_dim=args.output_dim,
+            hidden_dim=128,
+            word_output_dim=256,
+            sentence_output_dim=128,
+            fusion_output_dim=64,
             num_classes=num_classes,
-            num_word_layers=args.num_word_layers*2,
-            num_sentence_layers=args.num_word_layers*2
+            num_word_layers=16,
+            num_sentence_layers=4
         )
 
         # Determine the device for training
@@ -118,15 +140,16 @@ def train_distributed(rank: int, world_size: int, args):
         # Move model to the correct device
         model.to(device)
         
-        model = DistributedDataParallel(model)
+        model = DistributedDataParallel(model, find_unused_parameters=True)
         
         # Setup training utilities
-        early_stopping = EarlyStopping(patience=args.patience)
         checkpoint = ModelCheckpoint(
             os.path.join(args.save_dir, 'best_model.pt'),
             monitor='val_loss'
         )
 
+        patience_per_stage = {"sentence": 10, "word": 10, "fusion": 5, "fine_tune": 5}
+        early_stopping = {stage: EarlyStopping(patience=patience) for stage, patience in patience_per_stage.items()} 
         # Compute class weights only on rank 0
         class_weights = compute_class_weights(
             train_loader,
@@ -156,7 +179,23 @@ def train_distributed(rank: int, world_size: int, args):
         )
         
         # Train
-        for epoch in range(args.epochs):
+        epoch = 0
+        while epoch < args.epochs:
+            stage = get_training_stage(epoch)
+            
+            if epoch == 0:
+                trainer.freeze_all_except_sentence()
+                trainer.optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, trainer.model.parameters()), lr=1e-4)
+            elif epoch == 50:
+                trainer.freeze_all_except_word()
+                trainer.optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, trainer.model.parameters()), lr=1e-4)
+            elif epoch == 100:
+                trainer.freeze_all_except_fusion()
+                trainer.optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, trainer.model.parameters()), lr=5e-3)
+            elif epoch == 125:
+                trainer.unfreeze_all()
+                trainer.optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, trainer.model.parameters()), lr=5e-3)
+
             # Set epoch for distributed sampling
             train_loader.sampler.set_epoch(epoch)
             val_loader.sampler.set_epoch(epoch)
@@ -167,8 +206,9 @@ def train_distributed(rank: int, world_size: int, args):
             val_loss, val_acc = trainer.validate()
             torch.distributed.barrier()
             
-            trainer.scheduler.step(val_loss)
-            torch.distributed.barrier()
+            if stage in ["fusion", "fine_tune"]:
+                trainer.scheduler.step(val_loss)
+                torch.distributed.barrier()
             
             # Save checkpoints and log on rank 0
             if rank == 0:
@@ -183,13 +223,20 @@ def train_distributed(rank: int, world_size: int, args):
                 )
             
             # Synchronize early stopping across processes
-            should_stop = torch.tensor([early_stopping(val_loss)], dtype=torch.bool)
+            should_stop = torch.tensor([early_stopping[stage](val_loss)], dtype=torch.bool)
             torch.distributed.broadcast(should_stop, src=0)
             
             if should_stop.item():
-                if rank == 0:
-                    logger.info(f"Early stopping triggered at epoch {epoch}")
-                break
+                if stage == "fine_tune":
+                    if rank == 0:
+                        logger.info(f"Early stopping triggered at epoch {epoch}. Ending training.")
+                    break
+                else:
+                    next_stage_start_epoch = 50 if stage == "sentence" else 100 if stage == "word" else 125
+                    if rank == 0:
+                        logger.info(f"Early stopping triggered for stage {stage} at epoch {epoch}. Moving to next stage {get_training_stage(next_stage_start_epoch)}.")
+                    epoch = next_stage_start_epoch - 1  # Move to next stage start
+                    continue
         
         torch.distributed.barrier()
         
@@ -199,6 +246,8 @@ def train_distributed(rank: int, world_size: int, args):
         # Log results only on rank 0
         if rank == 0:
             logger.info(f"Test metrics: {test_metrics}")
+
+        epoch += 1
             
     except Exception as e:
         logger.error(f"Rank {rank} failed with error: {str(e)}")
@@ -217,14 +266,14 @@ def main():
     parser.add_argument('--processed_graphs_dir', type=str, default='processed_graphs',
                       help='Directory to store processed graph data')
     parser.add_argument('--save_dir', type=str, default='checkpoints')
-    parser.add_argument('--batch_size', type=int, default=32)
-    parser.add_argument('--input_dim', type=int, required=True)
+    parser.add_argument('--batch_size', type=int, default=1)
+    parser.add_argument('--input_dim', type=int, default=768)
     parser.add_argument('--hidden_dim', type=int, default=256)
     parser.add_argument('--output_dim', type=int, default=128)
-    parser.add_argument('--num_word_layers', type=int, default=3)
-    parser.add_argument('--learning_rate', type=float, default=1e-3)
-    parser.add_argument('--epochs', type=int, default=100)
-    parser.add_argument('--patience', type=int, default=7)
+    parser.add_argument('--num_word_layers', type=int, default=5)
+    parser.add_argument('--learning_rate', type=float, default=1e-5)
+    parser.add_argument('--epochs', type=int, default=135)
+    parser.add_argument('--patience', type=int, default=20)
     args = parser.parse_args()
     
     # Create directories

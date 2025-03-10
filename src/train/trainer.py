@@ -43,7 +43,7 @@ class CoGraphTrainer:
         # Training components
         self.criterion = FocalLoss(gamma=2.0, weight=self.class_weights)
         self.optimizer = Adam(model.parameters(), lr=learning_rate)
-        self.scheduler = ReduceLROnPlateau(self.optimizer, mode='min', patience=5, factor=0.5, min_lr=5e-2, verbose=True)
+        self.scheduler = ReduceLROnPlateau(self.optimizer, mode='min', patience=5, factor=0.5, min_lr=1e-5, verbose=True)
         
         # Tracking
         self.best_val_loss = float('inf')
@@ -73,6 +73,48 @@ class CoGraphTrainer:
         total_correct = sum(c.item() for c in all_corrects)
         
         return total_loss, total_samples, total_correct
+    
+    def freeze_all_except_sentence(self):
+        """Freeze all layers except the Sentence Model."""
+        for param in self.model.module.word_model.parameters():
+            param.requires_grad = False
+        for param in self.model.module.fusion.parameters():
+            param.requires_grad = False
+        for param in self.model.module.sentence_model.parameters():
+            param.requires_grad = True
+        for param in self.model.module.classifier.parameters():
+            param.requires_grad = True
+        self.logger.info("Training Sentence Model only.")
+
+    def freeze_all_except_word(self):
+        """Freeze all layers except the Word Model."""
+        for param in self.model.module.sentence_model.parameters():
+            param.requires_grad = False
+        for param in self.model.module.fusion.parameters():
+            param.requires_grad = False
+        for param in self.model.module.word_model.parameters():
+            param.requires_grad = True
+        for param in self.model.module.classifier.parameters():
+            param.requires_grad = True
+        self.logger.info("Training Word Model only.")
+
+    def freeze_all_except_fusion(self):
+        """Freeze all layers except the Fusion Layer."""
+        for param in self.model.module.word_model.parameters():
+            param.requires_grad = False
+        for param in self.model.module.sentence_model.parameters():
+            param.requires_grad = False
+        for param in self.model.module.fusion.parameters():
+            param.requires_grad = True
+        for param in self.model.module.classifier.parameters():
+            param.requires_grad = True
+        self.logger.info("Training Fusion Layer only.")
+
+    def unfreeze_all(self):
+        """Unfreeze all layers for fine-tuning."""
+        for param in self.model.module.parameters():
+            param.requires_grad = True
+        self.logger.info("Fine-tuning all layers.")
         
     def train_epoch(self, epoch: int) -> float:
         self.model.train()
@@ -158,7 +200,7 @@ class CoGraphTrainer:
                 correct += pred.eq(batch.y[:batch_size]).sum().item()
                 
                 # Update metrics
-                total_loss += loss.item() * batch_size
+                total_loss += loss.item()
                 total_samples += batch_size
         
         # Gather metrics from all processes

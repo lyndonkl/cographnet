@@ -2,11 +2,15 @@ from pathlib import Path
 import json
 from typing import List, Optional, Tuple, Set
 import torch
-from torch_geometric.data import Dataset
+from torch_geometric.data import Dataset, HeteroData
+from torch.utils.data import ConcatDataset, Subset
 from .graph_builder import GraphBuilder
 from torch_geometric.loader import DataLoader
 import torch.nn.functional as F
+import numpy as np
 import warnings
+from sklearn.model_selection import StratifiedKFold
+from torch.distributed import broadcast_object_list, barrier
 
 warnings.filterwarnings("ignore", message="You are using `torch.load` with `weights_only=False`")
 
@@ -34,6 +38,9 @@ class DocumentGraphDataset(Dataset):
         """
         self.data_dir = Path(data_dir)
         self.graph_builder = GraphBuilder()
+        # Rare classes (<5% of dataset): {'Diet': 2.97741273100616, 'Home Remedies': 1.4373716632443532, 'Location': 0.5133470225872689, 'Overview': 2.1560574948665296, 'Prevention': 1.642710472279261, 'Prognosis': 2.6694045174537986, 'Stages': 1.7453798767967144, 'Surgery': 2.4640657084188913}
+        # Remove these classes
+        self.rare_classes = {'Diet', 'Home Remedies', 'Location', 'Overview', 'Prevention', 'Prognosis', 'Stages', 'Surgery'}
         
         # Load documents and gather categories
         self.documents = []
@@ -43,8 +50,9 @@ class DocumentGraphDataset(Dataset):
                 try:
                     doc = json.load(f)
                     if 'text' in doc and 'category' in doc and doc['text'].strip() and doc['category'].strip():
-                        self.documents.append(doc)
-                        self.categories.add(doc['category'])
+                        if doc['category'] not in self.rare_classes:
+                            self.documents.append(doc)
+                            self.categories.add(doc['category'])
                     else:
                         print(f"Skipping invalid document in {file}: missing text or category")
                 except json.JSONDecodeError:
@@ -168,11 +176,16 @@ class DocumentGraphDataset(Dataset):
 def get_all_categories(train_dir: str, val_dir: str, test_dir: str) -> Set[str]:
     """Get all unique categories across all datasets."""
     categories = set()
+    rare_classes = {'Diet', 'Home Remedies', 'Location', 'Overview', 'Prevention', 'Prognosis', 'Stages', 'Surgery'}
+
     for data_dir in [train_dir, val_dir, test_dir]:
         for file in Path(data_dir).glob('*.json'):
             with open(file, 'r', encoding='utf-8') as f:
                 doc = json.load(f)
-                categories.add(doc['category'])
+                if 'text' in doc and 'category' in doc and doc['text'].strip() and doc['category'].strip():
+                    if doc['category'] not in rare_classes:
+                        categories.add(doc['category'])
+
     return categories
 
 def create_dataloaders(
@@ -184,6 +197,8 @@ def create_dataloaders(
     num_workers: int = 4,
     world_size: int = 1,
     rank: int = 0,
+    n_splits: int = 5,  # Number of K-Fold splits
+    current_fold: int = 0,  # Which fold to use (0 to n_splits-1)
     **dataset_kwargs
 ) -> Tuple[DataLoader, DataLoader, DataLoader, int]:
     """
@@ -227,15 +242,46 @@ def create_dataloaders(
         category_to_idx=category_to_idx,
         **dataset_kwargs
     )
+
+    # Combine train & validation datasets
+    full_dataset = ConcatDataset([train_dataset, val_dataset])
+
+    # Extract labels for StratifiedKFold
+    labels = [full_dataset[i].y.item() for i in range(len(full_dataset))]  # Assuming dataset returns (input, label)
+
+    # **Only Rank 0 performs Stratified K-Fold**
+    if rank == 0:
+        skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
+        train_idx, val_idx = list(skf.split(np.zeros(len(labels)), labels))[current_fold]
+    else:
+        train_idx, val_idx = None, None  # Placeholder for other ranks
+
+    # **Broadcast split indices to all ranks**
+    train_idx_list = [train_idx] if rank == 0 else [None]
+    val_idx_list = [val_idx] if rank == 0 else [None]
+
+    broadcast_object_list(train_idx_list, src=0)
+    broadcast_object_list(val_idx_list, src=0)
+
+    # **Barrier to ensure all ranks have received indices before proceeding**
+    barrier()
+
+    # Assign received indices to all ranks
+    train_idx = train_idx_list[0]
+    val_idx = val_idx_list[0]
+
+    # Create Subsets
+    train_subset = Subset(full_dataset, train_idx)
+    val_subset = Subset(full_dataset, val_idx)
     
     # Create dataloaders with DistributedSampler
-    train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, shuffle=True, num_replicas=world_size, rank=rank)
-    val_sampler = torch.utils.data.distributed.DistributedSampler(val_dataset, shuffle=False, num_replicas=world_size, rank=rank)
+    train_sampler = torch.utils.data.distributed.DistributedSampler(train_subset, shuffle=True, num_replicas=world_size, rank=rank)
+    val_sampler = torch.utils.data.distributed.DistributedSampler(val_subset, shuffle=False, num_replicas=world_size, rank=rank)
     test_sampler = torch.utils.data.distributed.DistributedSampler(test_dataset, shuffle=False, num_replicas=world_size, rank=rank)
     
     # Create dataloaders
     train_loader = DataLoader(
-        train_dataset,
+        train_subset,
         batch_size=batch_size,
         sampler=train_sampler,
         num_workers=num_workers,
@@ -243,7 +289,7 @@ def create_dataloaders(
     )
     
     val_loader = DataLoader(
-        val_dataset,
+        val_subset,
         batch_size=batch_size,
         sampler=val_sampler,
         num_workers=num_workers,
