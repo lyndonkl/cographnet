@@ -238,6 +238,7 @@ def train_distributed(rank: int, world_size: int, args):
                     epoch = next_stage_start_epoch - 1  # Move to next stage start
                     continue
         
+            epoch += 1
         torch.distributed.barrier()
         
         # Test on all processes and gather results
@@ -246,8 +247,6 @@ def train_distributed(rank: int, world_size: int, args):
         # Log results only on rank 0
         if rank == 0:
             logger.info(f"Test metrics: {test_metrics}")
-
-        epoch += 1
             
     except Exception as e:
         logger.error(f"Rank {rank} failed with error: {str(e)}")
