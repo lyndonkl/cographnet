@@ -10,8 +10,11 @@ class SwigluGatedGraphConv(MessagePassing):
         self.num_layers = num_layers
         self.out_channels = out_channels
 
+        # Project input features to hidden dimension.
+        self.lin_proj = nn.Linear(in_channels, out_channels)
+
         # Linear transform for message passing: W_a
-        self.lin_a = nn.Linear(in_channels, out_channels, bias=False)
+        self.lin_a = nn.Linear(out_channels, out_channels, bias=False)
 
         # Update gate parameters: W_z and U_z + bias
         self.lin_z_msg = nn.Linear(out_channels, out_channels)
@@ -42,7 +45,7 @@ class SwigluGatedGraphConv(MessagePassing):
         else:
             edge_weight = None
 
-        h = x  # h has shape [num_nodes, out_channels] (assume in_channels==out_channels or adjust accordingly)
+        h = self.lin_proj(x)  # h has shape [num_nodes, out_channels] (assume in_channels==out_channels or adjust accordingly)
         for _ in range(self.num_layers):
             # Message passing: aggregate transformed neighbor features.
             # This computes: m_i = sum_{j in N(i)} lin_a(h_j)*edge_weight (if provided)

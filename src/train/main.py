@@ -124,14 +124,11 @@ def train_distributed(rank: int, world_size: int, args):
         
         # Create model
         model = CoGraphNet(
-            input_dim=args.input_dim,
-            hidden_dim=128,
-            word_output_dim=256,
-            sentence_output_dim=128,
-            fusion_output_dim=64,
-            num_classes=num_classes,
-            num_word_layers=16,
-            num_sentence_layers=4
+            word_in_channels=args.input_dim,
+            sent_in_channels=args.input_dim,
+            hidden_channels=args.hidden_dim,
+            num_layers=args.num_layers,
+            num_classes=num_classes
         )
 
         # Determine the device for training

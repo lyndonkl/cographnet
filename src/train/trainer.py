@@ -76,37 +76,37 @@ class CoGraphTrainer:
     
     def freeze_all_except_sentence(self):
         """Freeze all layers except the Sentence Model."""
-        for param in self.model.module.word_model.parameters():
+        for param in self.model.module.word_net.parameters():
             param.requires_grad = False
         for param in self.model.module.fusion.parameters():
             param.requires_grad = False
-        for param in self.model.module.sentence_model.parameters():
+        for param in self.model.module.sent_net.parameters():
             param.requires_grad = True
-        for param in self.model.module.classifier.parameters():
+        for param in self.model.module.final_mlp.parameters():
             param.requires_grad = True
         self.logger.info("Training Sentence Model only.")
 
     def freeze_all_except_word(self):
         """Freeze all layers except the Word Model."""
-        for param in self.model.module.sentence_model.parameters():
+        for param in self.model.module.sent_net.parameters():
             param.requires_grad = False
         for param in self.model.module.fusion.parameters():
             param.requires_grad = False
-        for param in self.model.module.word_model.parameters():
+        for param in self.model.module.word_net.parameters():
             param.requires_grad = True
-        for param in self.model.module.classifier.parameters():
+        for param in self.model.module.final_mlp.parameters():
             param.requires_grad = True
         self.logger.info("Training Word Model only.")
 
     def freeze_all_except_fusion(self):
         """Freeze all layers except the Fusion Layer."""
-        for param in self.model.module.word_model.parameters():
+        for param in self.model.module.word_net.parameters():
             param.requires_grad = False
-        for param in self.model.module.sentence_model.parameters():
+        for param in self.model.module.sent_net.parameters():
             param.requires_grad = False
         for param in self.model.module.fusion.parameters():
             param.requires_grad = True
-        for param in self.model.module.classifier.parameters():
+        for param in self.model.module.final_mlp.parameters():
             param.requires_grad = True
         self.logger.info("Training Fusion Layer only.")
 
