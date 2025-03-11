@@ -133,26 +133,12 @@ class CoGraphTrainer:
         ) as pbar:
             for batch_idx, batch in enumerate(pbar):
                 
-                # Extract word graph components:
-                word_x = batch['word'].x.to(self.device)
-                word_edge_index = batch['word', 'co_occurs', 'word'].edge_index.to(self.device)
-                word_edge_weight = batch['word', 'co_occurs', 'word'].edge_attr.to(self.device) if 'edge_attr' in batch['word', 'co_occurs', 'word'] else None
-                word_batch = batch['word'].batch.to(self.device)
-                
-                # Extract sentence graph components:
-                sent_x = batch['sentence'].x.to(self.device)
-                sent_edge_index = batch['sentence', 'related_to', 'sentence'].edge_index.to(self.device)
-                sent_edge_weight = batch['sentence', 'related_to', 'sentence'].edge_attr.to(self.device) if 'edge_attr' in batch['sentence', 'related_to', 'sentence'] else None
-                sent_batch = batch['sentence'].batch.to(self.device)
-                
-                # Forward pass: call the model with separate word and sentence subgraphs.
-                outputs = self.model(
-                    word_x, word_edge_index, word_batch, word_edge_weight,
-                    sent_x, sent_edge_index, sent_batch, sent_edge_weight
-                )
-
+                batch = batch.to(self.device)
                 batch.y = batch.y.to(torch.long)
                 batch_size = batch.y.size(0)
+                
+                # Forward pass
+                outputs = self.model(batch)  # Should be [batch_size, num_classes]
                 
                 loss = self.criterion(outputs[:batch_size], batch.y[:batch_size])
                 loss = loss / accumulation_steps  # Scale loss for accumulation
@@ -202,25 +188,11 @@ class CoGraphTrainer:
         
         with torch.no_grad():
             for batch in self.val_loader:
-                # Extract subgraphs as in training:
-                word_x = batch['word'].x.to(self.device)
-                word_edge_index = batch['word', 'co_occurs', 'word'].edge_index.to(self.device)
-                word_edge_weight = batch['word', 'co_occurs', 'word'].edge_attr.to(self.device) if 'edge_attr' in batch['word', 'co_occurs', 'word'] else None
-                word_batch = batch['word'].batch.to(self.device)
-                
-                sent_x = batch['sentence'].x.to(self.device)
-                sent_edge_index = batch['sentence', 'related_to', 'sentence'].edge_index.to(self.device)
-                sent_edge_weight = batch['sentence', 'related_to', 'sentence'].edge_attr.to(self.device) if 'edge_attr' in batch['sentence', 'related_to', 'sentence'] else None
-                sent_batch = batch['sentence'].batch.to(self.device)
-                
-                outputs = self.model(
-                    word_x, word_edge_index, word_batch, word_edge_weight,
-                    sent_x, sent_edge_index, sent_batch, sent_edge_weight
-                )
-
                 batch = batch.to(self.device)
                 batch_size = batch.y.size(0)
                 
+                # Forward pass
+                outputs = self.model(batch)
                 loss = self.criterion(outputs[:batch_size], batch.y[:batch_size])
                 
                 # Calculate accuracy
@@ -247,24 +219,11 @@ class CoGraphTrainer:
         
         with torch.no_grad():
             for batch in self.test_loader:
-                word_x = batch['word'].x.to(self.device)
-                word_edge_index = batch['word', 'co_occurs', 'word'].edge_index.to(self.device)
-                word_edge_weight = batch['word', 'co_occurs', 'word'].edge_attr.to(self.device) if 'edge_attr' in batch['word', 'co_occurs', 'word'] else None
-                word_batch = batch['word'].batch.to(self.device)
-                
-                sent_x = batch['sentence'].x.to(self.device)
-                sent_edge_index = batch['sentence', 'related_to', 'sentence'].edge_index.to(self.device)
-                sent_edge_weight = batch['sentence', 'related_to', 'sentence'].edge_attr.to(self.device) if 'edge_attr' in batch['sentence', 'related_to', 'sentence'] else None
-                sent_batch = batch['sentence'].batch.to(self.device)
-                
-                outputs = self.model(
-                    word_x, word_edge_index, word_batch, word_edge_weight,
-                    sent_x, sent_edge_index, sent_batch, sent_edge_weight
-                )
-
                 batch = batch.to(self.device)
                 batch_size = batch.y.size(0)
                 
+                # Forward pass
+                outputs = self.model(batch)
                 loss = self.criterion(outputs[:batch_size], batch.y[:batch_size])
                 
                 # Calculate accuracy
