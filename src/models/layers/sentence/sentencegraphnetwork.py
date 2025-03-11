@@ -14,7 +14,7 @@ class WeightedSentenceAggregation(MessagePassing):
         
     def forward(self, x, edge_index, edge_weight=None):
         # Add self-loops; if edge_weight is provided, add 1 for each self-loop.
-        edge_index, tmp_edge_weight = add_self_loops(edge_index, num_nodes=x.size(0), edge_weight=edge_weight)
+        edge_index, tmp_edge_weight = add_self_loops(edge_index, num_nodes=x.size(0))
         if edge_weight is not None:
             edge_weight = torch.cat([edge_weight, torch.ones(x.size(0), device=x.device)], dim=0)
         return self.propagate(edge_index, x=x, edge_weight=edge_weight)
@@ -69,7 +69,7 @@ class CustomBiGRU(nn.Module):
         self.forward_cells = nn.ModuleList()
         self.backward_cells = nn.ModuleList()
         for i in range(num_layers):
-            curr_input_dim = input_dim if i == 0 else hidden_dim
+            curr_input_dim = input_dim if i == 0 else hidden_dim * 2
             self.forward_cells.append(CustomGRUCell(curr_input_dim, hidden_dim))
             self.backward_cells.append(CustomGRUCell(curr_input_dim, hidden_dim))
     
