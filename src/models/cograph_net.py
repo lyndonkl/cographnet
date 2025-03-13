@@ -18,8 +18,8 @@ class CoGraphNet(nn.Module):
             num_classes (int): Number of output classes.
         """
         super(CoGraphNet, self).__init__()
-        self.word_net = WordGraphNetwork(word_in_channels, hidden_channels, num_layers, num_classes)
-        self.sent_net = SentenceGraphNetwork(sent_in_channels, hidden_channels, num_layers, num_classes)
+        self.word_net = WordGraphNetwork(word_in_channels, hidden_channels, 16, num_classes)
+        self.sent_net = SentenceGraphNetwork(sent_in_channels, hidden_channels, 4, num_classes)
         self.fusion = FusionLayer()
         # Optional final classification layer after fusion.
         self.final_mlp = nn.Sequential(
