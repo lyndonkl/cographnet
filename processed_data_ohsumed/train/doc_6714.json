@@ -1,0 +1,4 @@
+{
+  "text": "A diagnostic expert system for colonic lesions.\n The diagnostic expert system for colonic lesions (DESCL) was designed to discriminate colonic adenoma and adenocarcinoma from normal colonic tissue.\n Although it was originally developed for use in conjunction with a machine vision analytic system, the DESCL has evolved into a teaching tool and a model for conceptual machine learning.\n The expert system is table driven and consists of a shell and a knowledge base.\n The latter comprises a series of architectural and cytologic observations and a quantitative estimate of diagnostic importance relating these observations to diagnostic outcome.\n In a validation study of 100 colonic lesions, the expert system achieved a success rate of 98%.\n It has the flexibility to allow individual pathologists to \"customize\" the knowledge base to suit their diagnostic criteria.",
+  "category": "C04"
+}
