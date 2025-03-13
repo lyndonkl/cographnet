@@ -1,6 +1,5 @@
-from .attention import WordAttention
-from .gnn import WordGNN
-from .readout import WordReadout
-from .swiglu import SwiGLU
+from .wordgraphnetwork import WordGraphNetwork
 
-__all__ = ['WordAttention', 'WordGNN', 'WordReadout', 'SwiGLU'] 
+__all__ = [
+    'WordGraphNetwork'
+]

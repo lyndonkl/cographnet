@@ -76,37 +76,37 @@ class CoGraphTrainer:
     
     def freeze_all_except_sentence(self):
         """Freeze all layers except the Sentence Model."""
-        for param in self.model.module.word_model.parameters():
+        for param in self.model.module.word_net.parameters():
             param.requires_grad = False
         for param in self.model.module.fusion.parameters():
             param.requires_grad = False
-        for param in self.model.module.sentence_model.parameters():
+        for param in self.model.module.sent_net.parameters():
             param.requires_grad = True
-        for param in self.model.module.classifier.parameters():
+        for param in self.model.module.final_mlp.parameters():
             param.requires_grad = True
         self.logger.info("Training Sentence Model only.")
 
     def freeze_all_except_word(self):
         """Freeze all layers except the Word Model."""
-        for param in self.model.module.sentence_model.parameters():
+        for param in self.model.module.sent_net.parameters():
             param.requires_grad = False
         for param in self.model.module.fusion.parameters():
             param.requires_grad = False
-        for param in self.model.module.word_model.parameters():
+        for param in self.model.module.word_net.parameters():
             param.requires_grad = True
-        for param in self.model.module.classifier.parameters():
+        for param in self.model.module.final_mlp.parameters():
             param.requires_grad = True
         self.logger.info("Training Word Model only.")
 
     def freeze_all_except_fusion(self):
         """Freeze all layers except the Fusion Layer."""
-        for param in self.model.module.word_model.parameters():
+        for param in self.model.module.word_net.parameters():
             param.requires_grad = False
-        for param in self.model.module.sentence_model.parameters():
+        for param in self.model.module.sent_net.parameters():
             param.requires_grad = False
         for param in self.model.module.fusion.parameters():
             param.requires_grad = True
-        for param in self.model.module.classifier.parameters():
+        for param in self.model.module.final_mlp.parameters():
             param.requires_grad = True
         self.logger.info("Training Fusion Layer only.")
 
@@ -121,7 +121,7 @@ class CoGraphTrainer:
         total_loss = 0
         total_samples = 0
 
-        accumulation_steps = 8  # Number of steps to accumulate gradients before updating
+        accumulation_steps = 64  # Number of steps to accumulate gradients before updating
         accumulated_loss = 0  # Track accumulated loss
         
         
@@ -133,12 +133,26 @@ class CoGraphTrainer:
         ) as pbar:
             for batch_idx, batch in enumerate(pbar):
                 
-                batch = batch.to(self.device)
+                # Extract word graph components:
+                word_x = batch['word'].x.to(self.device)
+                word_edge_index = batch['word', 'co_occurs', 'word'].edge_index.to(self.device)
+                word_edge_weight = batch['word', 'co_occurs', 'word'].edge_attr.to(self.device) if 'edge_attr' in batch['word', 'co_occurs', 'word'] else None
+                word_batch = batch['word'].batch.to(self.device)
+                
+                # Extract sentence graph components:
+                sent_x = batch['sentence'].x.to(self.device)
+                sent_edge_index = batch['sentence', 'related_to', 'sentence'].edge_index.to(self.device)
+                sent_edge_weight = batch['sentence', 'related_to', 'sentence'].edge_attr.to(self.device) if 'edge_attr' in batch['sentence', 'related_to', 'sentence'] else None
+                sent_batch = batch['sentence'].batch.to(self.device)
+                
+                # Forward pass: call the model with separate word and sentence subgraphs.
+                outputs = self.model(
+                    word_x, word_edge_index, word_batch, word_edge_weight,
+                    sent_x, sent_edge_index, sent_batch, sent_edge_weight
+                )
+
                 batch.y = batch.y.to(torch.long)
                 batch_size = batch.y.size(0)
-                
-                # Forward pass
-                outputs = self.model(batch)  # Should be [batch_size, num_classes]
                 
                 loss = self.criterion(outputs[:batch_size], batch.y[:batch_size])
                 loss = loss / accumulation_steps  # Scale loss for accumulation
@@ -188,11 +202,25 @@ class CoGraphTrainer:
         
         with torch.no_grad():
             for batch in self.val_loader:
+                # Extract subgraphs as in training:
+                word_x = batch['word'].x.to(self.device)
+                word_edge_index = batch['word', 'co_occurs', 'word'].edge_index.to(self.device)
+                word_edge_weight = batch['word', 'co_occurs', 'word'].edge_attr.to(self.device) if 'edge_attr' in batch['word', 'co_occurs', 'word'] else None
+                word_batch = batch['word'].batch.to(self.device)
+                
+                sent_x = batch['sentence'].x.to(self.device)
+                sent_edge_index = batch['sentence', 'related_to', 'sentence'].edge_index.to(self.device)
+                sent_edge_weight = batch['sentence', 'related_to', 'sentence'].edge_attr.to(self.device) if 'edge_attr' in batch['sentence', 'related_to', 'sentence'] else None
+                sent_batch = batch['sentence'].batch.to(self.device)
+                
+                outputs = self.model(
+                    word_x, word_edge_index, word_batch, word_edge_weight,
+                    sent_x, sent_edge_index, sent_batch, sent_edge_weight
+                )
+
                 batch = batch.to(self.device)
                 batch_size = batch.y.size(0)
                 
-                # Forward pass
-                outputs = self.model(batch)
                 loss = self.criterion(outputs[:batch_size], batch.y[:batch_size])
                 
                 # Calculate accuracy
@@ -219,11 +247,24 @@ class CoGraphTrainer:
         
         with torch.no_grad():
             for batch in self.test_loader:
+                word_x = batch['word'].x.to(self.device)
+                word_edge_index = batch['word', 'co_occurs', 'word'].edge_index.to(self.device)
+                word_edge_weight = batch['word', 'co_occurs', 'word'].edge_attr.to(self.device) if 'edge_attr' in batch['word', 'co_occurs', 'word'] else None
+                word_batch = batch['word'].batch.to(self.device)
+                
+                sent_x = batch['sentence'].x.to(self.device)
+                sent_edge_index = batch['sentence', 'related_to', 'sentence'].edge_index.to(self.device)
+                sent_edge_weight = batch['sentence', 'related_to', 'sentence'].edge_attr.to(self.device) if 'edge_attr' in batch['sentence', 'related_to', 'sentence'] else None
+                sent_batch = batch['sentence'].batch.to(self.device)
+                
+                outputs = self.model(
+                    word_x, word_edge_index, word_batch, word_edge_weight,
+                    sent_x, sent_edge_index, sent_batch, sent_edge_weight
+                )
+
                 batch = batch.to(self.device)
                 batch_size = batch.y.size(0)
                 
-                # Forward pass
-                outputs = self.model(batch)
                 loss = self.criterion(outputs[:batch_size], batch.y[:batch_size])
                 
                 # Calculate accuracy

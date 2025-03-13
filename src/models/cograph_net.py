@@ -1,140 +1,83 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from .word_model import WordGraphModel
-from .sentence_model import SentenceGraphModel
-from .layers.fusion import FeatureFusion
-from torch_geometric.nn import GatedGraphConv
+from .layers.word import WordGraphNetwork
+from .layers.sentence import SentenceGraphNetwork
+from .layers.fusion import FusionLayer
 
 class CoGraphNet(nn.Module):
-    """
-    CoGraphNet: A dual-graph neural network for text classification.
-    
-    Processes text through separate word and sentence graphs, then fuses their features.
-    Word graph: Uses GRU with SwiGLU and multi-hop message passing
-    Sentence graph: Uses BiGRU with SwiGLU and position-aware graph propagation
-    Feature fusion: Learned weighted combination of word and sentence features
-    """
-    
-    def __init__(
-        self,
-        input_dim: int,
-        hidden_dim: int,
-        word_output_dim: int,
-        sentence_output_dim: int,
-        fusion_output_dim: int,
-        num_classes: int,
-        num_word_layers: int = 3,
-        num_sentence_layers: int = 3
-    ):
-        super().__init__()
-        
-        # Word graph model - processes word co-occurrence relationships
-        self.word_model = WordGraphModel(
-            input_dim=input_dim,
-            hidden_dim=hidden_dim,
-            output_dim=word_output_dim,
-            num_layers=num_word_layers
-        )
-        
-        # Sentence graph model - processes sentence relationships with positional bias
-        self.sentence_model = SentenceGraphModel(
-            input_dim=input_dim,
-            hidden_dim=hidden_dim,
-            output_dim=sentence_output_dim,
-            num_layers=num_sentence_layers
-        )
-        
-        # Feature fusion - learns to combine word and sentence representations
-        self.fusion = FeatureFusion(word_dim=word_output_dim, sentence_dim=sentence_output_dim, fusion_dim=fusion_output_dim)
-        
-        # Classification head
-        self.classifier = nn.Sequential(
-            nn.LayerNorm(fusion_output_dim),  # Normalize before classification
-            nn.Linear(fusion_output_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Dropout(0.1),
-            nn.Linear(hidden_dim, num_classes)
-        )
-
-        self._init_weights()
-    
-    def _init_weights(self):
-        """Apply weight initialization."""
-        for module in self.modules():
-            if isinstance(module, nn.Linear):  # Initialize Linear layers
-                nn.init.xavier_uniform_(module.weight)  # Good for deep networks
-                if module.bias is not None:
-                    nn.init.zeros_(module.bias)  # Bias = 0 for stability
-
-            elif isinstance(module, nn.GRU):  # Initialize GRU layers
-                for name, param in module.named_parameters():
-                    if 'weight' in name:
-                        nn.init.xavier_uniform_(param)
-                    elif 'bias' in name:
-                        nn.init.zeros_(param)
-
-            elif isinstance(module, nn.Embedding):  # Initialize Embedding layers if present
-                nn.init.xavier_uniform_(module.weight)
-
-            elif isinstance(module, GatedGraphConv):  # Handle Gated Graph Convolution
-                for name, param in module.named_parameters():
-                    if 'weight' in name:
-                        nn.init.xavier_uniform_(param)  # Xavier Uniform for stability
-                    elif 'bias' in name:
-                        nn.init.zeros_(param)
-    
-    def forward(self, data):
+    def __init__(self, word_in_channels, sent_in_channels, hidden_channels, num_layers, num_classes):
         """
-        Forward pass through the network.
+        CoGraphNet integrates word-level and sentence-level graph neural networks,
+        and fuses their outputs.
         
         Args:
-            data: Dictionary containing:
-                - word.x: Word features
-                - word.edge_index: Word graph edges
-                - word.edge_attr: Word edge weights (co-occurrence based)
-                - word.batch: Word batch indices
-                - sentence.x: Sentence features
-                - sentence.edge_index: Sentence graph edges
-                - sentence.edge_attr: Sentence edge weights
-                - sentence.batch: Sentence batch indices
+            word_in_channels (int): Input feature dimension for word nodes.
+            sent_in_channels (int): Input feature dimension for sentence nodes.
+            hidden_channels (int): Hidden feature dimension.
+            num_layers (int): Number of propagation layers / GRU layers.
+            num_classes (int): Number of output classes.
         """
-        # Extract node features directly
-        word_x = data['word'].x
-        sentence_x = data['sentence'].x
-
-        # Extract batch indices directly
-        word_batch = data['word'].batch
-        sentence_batch = data['sentence'].batch
-
-        # Extract edge indices and attributes directly
-        word_edge_index = data[('word', 'co_occurs', 'word')].edge_index
-        word_edge_attr = data[('word', 'co_occurs', 'word')].edge_attr
-
-        sentence_edge_index = data[('sentence', 'related_to', 'sentence')].edge_index
-        sentence_edge_attr = data[('sentence', 'related_to', 'sentence')].edge_attr
-
-        # Process word graph
-        word_out = self.word_model(
-            word_x,
-            word_edge_index,
-            word_edge_attr,
-            word_batch
+        super(CoGraphNet, self).__init__()
+        self.word_net = WordGraphNetwork(word_in_channels, hidden_channels, 16, num_classes)
+        self.sent_net = SentenceGraphNetwork(sent_in_channels, hidden_channels, 4, num_classes)
+        self.fusion = FusionLayer()
+        # Optional final classification layer after fusion.
+        self.final_mlp = nn.Sequential(
+            nn.Linear(num_classes, num_classes),
+            nn.Softmax(dim=1)
         )
+    
+    def forward(self, word_x, word_edge_index, word_batch, word_edge_weight,
+                      sent_x, sent_edge_index, sent_batch, sent_edge_weight):
+        """
+        Args:
+            word_x: Word node features [num_word_nodes, word_in_channels]
+            word_edge_index: Word graph connectivity [2, num_word_edges]
+            word_batch: Batch vector for word nodes [num_word_nodes]
+            word_edge_weight: Optional edge weights for word graph [num_word_edges]
+            sent_x: Sentence node features [num_sent_nodes, sent_in_channels]
+            sent_edge_index: Sentence graph connectivity [2, num_sent_edges]
+            sent_batch: Batch vector for sentence nodes [num_sent_nodes]
+            sent_edge_weight: Optional edge weights for sentence graph [num_sent_edges]
+        """
+        # Get word-level graph output (e.g., via global pooling and MLP)
+        x_word = self.word_net(word_x, word_edge_index, word_batch, edge_weight=word_edge_weight)
+        # Get sentence-level graph output
+        x_sen = self.sent_net(sent_x, sent_edge_index, sent_batch, edge_weight=sent_edge_weight)
+        # Fuse the outputs using the fusion layer.
+        x_fused = self.fusion(x_word, x_sen)
+        # Optionally, pass through a final MLP with softmax to produce probabilities.
+        out = self.final_mlp(x_fused)
+        return out
 
-        # Process sentence graph
-        sentence_out = self.sentence_model(
-            sentence_x,
-            sentence_edge_index,
-            sentence_edge_attr,
-            sentence_batch
-        )
+#############################################
+# Example Usage for CoGraphNet
+#############################################
+if __name__ == '__main__':
+    # For demonstration, we simulate data for a batch of 4 graphs.
+    # --- Word Graph Data ---
+    num_word_nodes = 100
+    word_in_channels = 128
+    word_x = torch.randn(num_word_nodes, word_in_channels)
+    word_edge_index = torch.randint(0, num_word_nodes, (2, 300))
+    word_edge_weight = torch.rand(300)
+    word_batch = torch.randint(0, 4, (num_word_nodes,))  # 4 graphs
 
-        # Feature fusion
-        fused = self.fusion(word_out, sentence_out)
-        fused = F.dropout(fused, p=0.2, training=self.training)  # Dropout before classification
-        
-        # Final classification
-        outputs = self.classifier(fused)
-        
-        return outputs
+    # --- Sentence Graph Data ---
+    num_sent_nodes = 65  # e.g., variable number of sentences across 4 graphs.
+    sent_in_channels = 128
+    sent_x = torch.randn(num_sent_nodes, sent_in_channels)
+    sent_edge_index = torch.randint(0, num_sent_nodes, (2, 200))
+    sent_edge_weight = torch.rand(200)
+    # Create a batch vector with variable lengths. For example:
+    # Graph 0: 15 sentences, Graph 1: 20, Graph 2: 10, Graph 3: 20.
+    sent_batch = torch.tensor([0]*15 + [1]*20 + [2]*10 + [3]*20)
+
+    num_classes = 10
+    hidden_channels = 128
+    num_layers = 3
+
+    model = CoGraphNet(word_in_channels, sent_in_channels, hidden_channels, num_layers, num_classes)
+    logits = model(word_x, word_edge_index, word_batch, word_edge_weight,
+                   sent_x, sent_edge_index, sent_batch, sent_edge_weight)
+    print("Logits shape:", logits.shape)  # Expected shape: [4, num_classes]
