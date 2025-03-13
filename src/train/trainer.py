@@ -121,7 +121,7 @@ class CoGraphTrainer:
         total_loss = 0
         total_samples = 0
 
-        accumulation_steps = 8  # Number of steps to accumulate gradients before updating
+        accumulation_steps = 64  # Number of steps to accumulate gradients before updating
         accumulated_loss = 0  # Track accumulated loss
         
         

@@ -86,11 +86,11 @@ def compute_class_weights(train_loader, num_classes, device, rank, world_size):
     return class_weights_tensor
 
 def get_training_stage(epoch):
-    if epoch < 50:
+    if epoch < 25:
         return "sentence"
-    elif epoch < 100:
+    elif epoch < 50:
         return "word"
-    elif epoch < 125:
+    elif epoch < 75:
         return "fusion"
     else:
         return "fine_tune"
@@ -127,7 +127,7 @@ def train_distributed(rank: int, world_size: int, args):
             word_in_channels=args.input_dim,
             sent_in_channels=args.input_dim,
             hidden_channels=args.hidden_dim,
-            num_layers=args.num_layers,
+            num_layers=args.num_word_layers,
             num_classes=num_classes
         )
 
@@ -183,13 +183,13 @@ def train_distributed(rank: int, world_size: int, args):
             if epoch == 0:
                 trainer.freeze_all_except_sentence()
                 trainer.optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, trainer.model.parameters()), lr=1e-4)
-            elif epoch == 50:
+            elif epoch == 25:
                 trainer.freeze_all_except_word()
                 trainer.optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, trainer.model.parameters()), lr=1e-4)
-            elif epoch == 100:
+            elif epoch == 50:
                 trainer.freeze_all_except_fusion()
                 trainer.optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, trainer.model.parameters()), lr=5e-3)
-            elif epoch == 125:
+            elif epoch == 75:
                 trainer.unfreeze_all()
                 trainer.optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, trainer.model.parameters()), lr=5e-3)
 
@@ -229,7 +229,7 @@ def train_distributed(rank: int, world_size: int, args):
                         logger.info(f"Early stopping triggered at epoch {epoch}. Ending training.")
                     break
                 else:
-                    next_stage_start_epoch = 50 if stage == "sentence" else 100 if stage == "word" else 125
+                    next_stage_start_epoch = 25 if stage == "sentence" else 50 if stage == "word" else 75
                     if rank == 0:
                         logger.info(f"Early stopping triggered for stage {stage} at epoch {epoch}. Moving to next stage {get_training_stage(next_stage_start_epoch)}.")
                     epoch = next_stage_start_epoch  # Move to next stage start
