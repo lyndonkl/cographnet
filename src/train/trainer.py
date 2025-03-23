@@ -121,7 +121,7 @@ class CoGraphTrainer:
         total_loss = 0
         total_samples = 0
 
-        accumulation_steps = 64  # Number of steps to accumulate gradients before updating
+        accumulation_steps = 128  # Number of steps to accumulate gradients before updating
         accumulated_loss = 0  # Track accumulated loss
         
         
@@ -156,19 +156,58 @@ class CoGraphTrainer:
                 
                 loss = self.criterion(outputs[:batch_size], batch.y[:batch_size])
                 loss = loss / accumulation_steps  # Scale loss for accumulation
+                # Break after printting
+                # WHen loss is nan print outputs and any nan gradients if they exist
+                # Outputs are nan for bad batch, lets check data for word, sentence and edge attributes
+                if torch.isnan(loss).any():
+                    print(f"Loss is NaN for batch {batch_idx}")
+                    print(f"Outputs: {outputs[:batch_size]}")
+                    print(f"Batch: {batch}")
+                    print(f"Batch word x: {word_x}")
+                    print(f"Batch sentence x: {sent_x}")
+                    print(f"Batch word edge index: {word_edge_index}")
+                    print(f"Batch sentence edge index: {sent_edge_index}")
+                    print(f"Batch word edge weight: {word_edge_weight}")
+                    print(f"Batch sentence edge weight: {sent_edge_weight}")
+                    print(f"Batch size: {batch_size}")
+                    print(f"Batch y: {batch.y[:batch_size]}")
+                    break
                 
                 # Backward pass
                 loss.backward()
 
+                # Check for nan values in gradients for gradients that exist
+                for param in self.model.parameters():
+                    if param.grad is not None and torch.isnan(param.grad).any():
+                        print(f"Gradient is NaN for parameter: {param.name}")
+                        print(f"Gradient: {param.grad}")
+                        print(f"Parameter: {param}")
+                        print(f"Parameter shape: {param.shape}")
+                        break
+
                 # Accumulate loss for tracking
                 accumulated_loss += loss.item()
                 total_samples += batch_size
+
+                print(f"Loss: {accumulated_loss}")
 
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
                 
                 # Perform optimizer step only every `accumulation_steps`
                 if (batch_idx + 1) % accumulation_steps == 0 or (batch_idx + 1) == len(self.train_loader):
                     torch.distributed.barrier()  # Ensure all processes reach this point before reducing gradients
+                    # Loss is becoming nan at this point, lets print to debug why
+                    print(f"Loss: {accumulated_loss}")
+                    # Print accumulated gradients
+                    # Check for nan values in gradients for gradients that exist
+                    for param in self.model.parameters():
+                        if param.grad is not None and torch.isnan(param.grad).any():
+                            print(f"Gradient is NaN for parameter: {param.name}")
+                            print(f"Gradient: {param.grad}")
+                            print(f"Parameter: {param}")
+                            print(f"Parameter shape: {param.shape}")
+                            print(f"Parameter requires_grad: {param.requires_grad}")
+                            break
 
                     self.optimizer.step()
                     self.optimizer.zero_grad()  # Clear accumulated gradients
@@ -179,6 +218,14 @@ class CoGraphTrainer:
                     total_loss += loss_tensor.item()  # Accumulate the reduced loss
 
                     torch.distributed.barrier()
+                    for param in self.model.parameters():
+                        if param.grad is not None and torch.isnan(param.grad).any():
+                            print(f"Gradient is NaN for parameter: {param.name}")
+                            print(f"Gradient: {param.grad}")
+                            print(f"Parameter: {param}")
+                            print(f"Parameter shape: {param.shape}")
+                            print(f"Parameter requires_grad: {param.requires_grad}")
+                            break
 
                     accumulated_loss = 0  # Reset accumulated loss after step
                 

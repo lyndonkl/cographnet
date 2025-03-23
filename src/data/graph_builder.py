@@ -79,14 +79,17 @@ class GraphBuilder:
         pos2: int
     ) -> float:
         """Calculate edge weight between sentences."""
-        # Position bias
-        wgp1 = torch.tanh(torch.tensor(1.0 / (pos1 + 1)))
-        wgp2 = torch.tanh(torch.tensor(1.0 / (pos2 + 1)))
+        # Position bias with small epsilon to prevent division by zero
+        eps = 1e-8
+        wgp1 = torch.tanh(torch.tensor(1.0 / (pos1 + 1 + eps)))
+        wgp2 = torch.tanh(torch.tensor(1.0 / (pos2 + 1 + eps)))
         
         # Cosine similarity
         cos_sim = torch.nn.functional.cosine_similarity(emb1, emb2, dim=0)
         
-        return cos_sim * wgp1 * wgp2
+        # Return 0.0 if we get NaN, otherwise return the computed weight
+        weight = cos_sim * wgp1 * wgp2
+        return 0.0 if torch.isnan(weight) else float(weight)
 
     def _preprocess_document(self, document: str) -> str:
         """Preprocess document by removing stopwords and rare words."""
@@ -366,12 +369,23 @@ class GraphBuilder:
             word_word_edges.append([word1_idx, word2_idx])
             edge_weights.append(weight)  # Use summed weights
 
+        # Initialize empty word edges and weights
+        data['word', 'co_occurs', 'word'].edge_index = torch.empty((2, 0), dtype=torch.long)
+        data['word', 'co_occurs', 'word'].edge_attr = torch.empty(0, dtype=torch.float)
+
         # Store edges in PyTorch Geometric HeteroData format
         if word_word_edges:  # Check if we have any edges
             edge_weights = torch.tensor(edge_weights, dtype=torch.float)
+            
+            # Safe standardization
+            eps = 1e-8
             mean = edge_weights.mean()
-            std = edge_weights.std() + 1e-8  # Avoid division by zero
-            edge_weights = (edge_weights - mean) / std
+            std = edge_weights.std()
+            
+            if std < eps:  # If standard deviation is too small
+                edge_weights = edge_weights - mean  # Just center the values
+            else:
+                edge_weights = (edge_weights - mean) / (std + eps)  # Safe standardization
 
             data['word', 'co_occurs', 'word'].edge_index = torch.tensor(
                 word_word_edges, dtype=torch.long
@@ -401,9 +415,16 @@ class GraphBuilder:
             
             if sentence_edges:  # Check if we have any edges
                 sentence_edge_attr = torch.tensor(sentence_edge_weights, dtype=torch.float)
+                
+                # Safe standardization
+                eps = 1e-8
                 mean = sentence_edge_attr.mean()
-                std = sentence_edge_attr.std() + 1e-8
-                sentence_edge_attr = (sentence_edge_attr - mean) / std  # Standardization
+                std = sentence_edge_attr.std()
+                
+                if std < eps:  # If standard deviation is too small
+                    sentence_edge_attr = sentence_edge_attr - mean  # Just center the values
+                else:
+                    sentence_edge_attr = (sentence_edge_attr - mean) / (std + eps)  # Safe standardization
 
                 data['sentence', 'related_to', 'sentence'].edge_index = torch.tensor(
                     sentence_edges, dtype=torch.long
