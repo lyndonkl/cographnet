@@ -106,6 +106,9 @@ def train_distributed(rank: int, world_size: int, args):
     """Distributed training function."""
     logger = setup_logger()
     setup_distributed(rank, world_size)
+    torch.manual_seed(42)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
     
     try:
         # Create dataloaders using our OHSUMED create_dataloaders function

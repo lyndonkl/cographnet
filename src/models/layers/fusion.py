@@ -14,6 +14,7 @@ class FusionLayer(nn.Module):
         # Learnable scalar parameters for weighting the contributions.
         self.alpha1 = nn.Parameter(torch.tensor(init_alpha1, dtype=torch.float))
         self.alpha2 = nn.Parameter(torch.tensor(init_alpha2, dtype=torch.float))
+        self.dropout = nn.Dropout(p=0.5)
         
     def forward(self, x_word: torch.Tensor, x_sen: torch.Tensor) -> torch.Tensor:
         """
@@ -28,6 +29,7 @@ class FusionLayer(nn.Module):
         """
         # Compute weighted sum and average.
         fused = (self.alpha1 * x_word + self.alpha2 * x_sen) / 2.0
+        fused = self.dropout(fused)
         return fused
 
 # Example usage:

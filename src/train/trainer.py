@@ -42,7 +42,11 @@ class CoGraphTrainer:
         
         # Training components
         self.criterion = FocalLoss(gamma=2.0, weight=self.class_weights)
-        self.optimizer = Adam(model.parameters(), lr=learning_rate)
+        self.optimizer = Adam(
+            filter(lambda p: p.requires_grad, model.parameters()), 
+            lr=learning_rate, 
+            weight_decay=0.0
+        )
         self.scheduler = ReduceLROnPlateau(self.optimizer, mode='min', patience=5, factor=0.5, min_lr=1e-5, verbose=True)
         
         # Tracking
