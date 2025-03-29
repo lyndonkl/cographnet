@@ -109,7 +109,7 @@ class CustomBiGRU(nn.Module):
 # Sentence Graph Network Implementation (Variable-length Sequences)
 #############################################
 class SentenceGraphNetwork(nn.Module):
-    def __init__(self, in_channels, hidden_channels, num_layers, num_classes):
+    def __init__(self, in_channels, hidden_channels, num_layers, num_classes, dropout_rate=0.3):
         super(SentenceGraphNetwork, self).__init__()
         # First, update sentence node embeddings using a weighted message passing layer.
         self.sentence_agg = WeightedSentenceAggregation(in_channels, in_channels)
@@ -122,11 +122,11 @@ class SentenceGraphNetwork(nn.Module):
         self.att_gate = nn.Linear(hidden_channels * 2, 1)
         # An embedding transformation after attention.
         self.att_emb = nn.Linear(hidden_channels * 2, hidden_channels)
-        self.dropout = nn.Dropout(p=0.3)
+        self.dropout = nn.Dropout(p=dropout_rate)
         # Final MLP for classification.
         self.mlp = nn.Sequential(
             nn.Linear(2 * hidden_channels, hidden_channels),
-            nn.Dropout(p=0.5),
+            nn.Dropout(p=dropout_rate),
             nn.ReLU(),
             nn.Linear(hidden_channels, num_classes)
         )

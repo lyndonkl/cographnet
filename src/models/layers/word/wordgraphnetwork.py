@@ -87,7 +87,7 @@ class SwigluGatedGraphConv(MessagePassing):
 
 
 class WordGraphNetwork(nn.Module):
-    def __init__(self, in_channels, hidden_channels, num_layers, num_classes):
+    def __init__(self, in_channels, hidden_channels, num_layers, num_classes, dropout_rate=0.3):
         super(WordGraphNetwork, self).__init__()
         # Use the custom GGNN layer (which includes GRU-style updates with SwiGLU)
         self.ggnn = SwigluGatedGraphConv(in_channels, hidden_channels, num_layers)
@@ -99,10 +99,10 @@ class WordGraphNetwork(nn.Module):
 
         # Final MLP for classification (or for fusion with sentence-level output)
         # We combine global max and mean pooling, so input dimension is 2*hidden_channels.
-        self.dropout = nn.Dropout(p=0.3)
+        self.dropout = nn.Dropout(p=dropout_rate)
         self.mlp = nn.Sequential(
             nn.Linear(2 * hidden_channels, hidden_channels),
-            nn.Dropout(p=0.5),
+            nn.Dropout(p=dropout_rate),
             nn.ReLU(),
             nn.Linear(hidden_channels, num_classes)
         )

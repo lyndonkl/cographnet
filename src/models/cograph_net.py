@@ -5,7 +5,7 @@ from .layers.sentence import SentenceGraphNetwork
 from .layers.fusion import FusionLayer
 
 class CoGraphNet(nn.Module):
-    def __init__(self, word_in_channels, sent_in_channels, hidden_channels, num_layers, num_classes):
+    def __init__(self, word_in_channels, sent_in_channels, hidden_channels, num_layers, num_classes, dropout_rate=0.3):
         """
         CoGraphNet integrates word-level and sentence-level graph neural networks,
         and fuses their outputs.
@@ -18,14 +18,14 @@ class CoGraphNet(nn.Module):
             num_classes (int): Number of output classes.
         """
         super(CoGraphNet, self).__init__()
-        self.word_net = WordGraphNetwork(word_in_channels, hidden_channels, 2, num_classes)
-        self.sent_net = SentenceGraphNetwork(sent_in_channels, hidden_channels, 2, num_classes)
-        self.fusion = FusionLayer()
-        self.dropout = nn.Dropout(p=0.3)
+        self.word_net = WordGraphNetwork(word_in_channels, hidden_channels, 2, num_classes, dropout_rate)
+        self.sent_net = SentenceGraphNetwork(sent_in_channels, hidden_channels, 2, num_classes, dropout_rate)
+        self.fusion = FusionLayer(dropout_rate=dropout_rate)
+        self.dropout = nn.Dropout(p=dropout_rate)
         # Optional final classification layer after fusion.
         self.final_mlp = nn.Sequential(
             nn.Linear(num_classes, num_classes),
-            nn.Dropout(p=0.5)
+            nn.Dropout(p=dropout_rate)
         )
     
     def forward(self, word_x, word_edge_index, word_batch, word_edge_weight,
