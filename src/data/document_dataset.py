@@ -38,9 +38,6 @@ class DocumentGraphDataset(Dataset):
         """
         self.data_dir = Path(data_dir)
         self.graph_builder = GraphBuilder()
-        # Rare classes (<5% of dataset): {'Diet': 2.97741273100616, 'Home Remedies': 1.4373716632443532, 'Location': 0.5133470225872689, 'Overview': 2.1560574948665296, 'Prevention': 1.642710472279261, 'Prognosis': 2.6694045174537986, 'Stages': 1.7453798767967144, 'Surgery': 2.4640657084188913}
-        # Remove these classes
-        self.rare_classes = {'Diet', 'Home Remedies', 'Location', 'Overview', 'Prevention', 'Prognosis', 'Stages', 'Surgery'}
         
         # Load documents and gather categories
         self.documents = []
@@ -50,9 +47,8 @@ class DocumentGraphDataset(Dataset):
                 try:
                     doc = json.load(f)
                     if 'text' in doc and 'category' in doc and doc['text'].strip() and doc['category'].strip():
-                        if doc['category'] not in self.rare_classes:
-                            self.documents.append(doc)
-                            self.categories.add(doc['category'])
+                        self.documents.append(doc)
+                        self.categories.add(doc['category'])
                     else:
                         print(f"Skipping invalid document in {file}: missing text or category")
                 except json.JSONDecodeError:
@@ -211,15 +207,13 @@ class DocumentGraphDataset(Dataset):
 def get_all_categories(train_dir: str, val_dir: str, test_dir: str) -> Set[str]:
     """Get all unique categories across all datasets."""
     categories = set()
-    rare_classes = {'Diet', 'Home Remedies', 'Location', 'Overview', 'Prevention', 'Prognosis', 'Stages', 'Surgery'}
 
     for data_dir in [train_dir, val_dir, test_dir]:
         for file in Path(data_dir).glob('*.json'):
             with open(file, 'r', encoding='utf-8') as f:
                 doc = json.load(f)
                 if 'text' in doc and 'category' in doc and doc['text'].strip() and doc['category'].strip():
-                    if doc['category'] not in rare_classes:
-                        categories.add(doc['category'])
+                    categories.add(doc['category'])
 
     return categories
 
