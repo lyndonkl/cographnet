@@ -109,7 +109,7 @@ class CustomBiGRU(nn.Module):
 # Sentence Graph Network Implementation (Variable-length Sequences)
 #############################################
 class SentenceGraphNetwork(nn.Module):
-    def __init__(self, in_channels, hidden_channels, num_layers, num_classes):
+    def __init__(self, in_channels, hidden_channels, num_layers, num_classes, dropout_rate=0.3):
         super(SentenceGraphNetwork, self).__init__()
         # First, update sentence node embeddings using a weighted message passing layer.
         self.sentence_agg = WeightedSentenceAggregation(in_channels, in_channels)
@@ -122,9 +122,11 @@ class SentenceGraphNetwork(nn.Module):
         self.att_gate = nn.Linear(hidden_channels * 2, 1)
         # An embedding transformation after attention.
         self.att_emb = nn.Linear(hidden_channels * 2, hidden_channels)
+        self.dropout = nn.Dropout(p=dropout_rate)
         # Final MLP for classification.
         self.mlp = nn.Sequential(
             nn.Linear(2 * hidden_channels, hidden_channels),
+            nn.Dropout(p=dropout_rate),
             nn.ReLU(),
             nn.Linear(hidden_channels, num_classes)
         )
@@ -137,7 +139,11 @@ class SentenceGraphNetwork(nn.Module):
         edge_weight: Optional edge weight tensor, shape [num_edges].
         """
         # 1. Update sentence node embeddings via weighted message passing.
-        x = self.sentence_agg(x, edge_index, edge_weight=edge_weight)  # [num_sentence_nodes, in_channels]
+            # Iteratively update sentence node embeddings (2 GRU steps)
+        for _ in range(2):
+            x = self.sentence_agg(x, edge_index, edge_weight=edge_weight)
+            x = torch.tanh(x)         # Optional non-linearity as per paper (GraphLayer Tanh)
+            x = self.dropout(x)       # Apply dropout after each aggregation
         
         # 2. Process each graph separately because sentence counts vary.
         unique_batches = batch.unique(sorted=True)
@@ -157,6 +163,7 @@ class SentenceGraphNetwork(nn.Module):
             att_scores = torch.sigmoid(self.att_gate(x_bi))  # (L_b, 1)
             x_att = x_bi * att_scores  # (L_b, 2*hidden_channels)
             x_att = F.relu(self.att_emb(x_att))  # (L_b, hidden_channels)
+            x_att = self.dropout(x_att)  # Add dropout before pooling
             # 5. Pooling over variable-length sequence.
             # Global max pooling:
             p_max, _ = x_att.max(dim=0)  # (hidden_channels,)

@@ -106,10 +106,13 @@ def train_distributed(rank: int, world_size: int, args):
     """Distributed training function."""
     logger = setup_logger()
     setup_distributed(rank, world_size)
+    torch.manual_seed(42)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
     
     try:
         # Create dataloaders using our OHSUMED create_dataloaders function
-        train_loader, val_loader, test_loader, num_classes = create_dataloaders(
+        train_loader, val_loader, test_loader, num_classes = create_dataloaders_ohsumed(
             root=args.processed_graphs_dir,
             train_dir=args.train_path,
             test_dir=args.test_path,
@@ -153,6 +156,7 @@ def train_distributed(rank: int, world_size: int, args):
             rank=rank,
             world_size=world_size
         )
+        print(f"Class weights: {class_weights}")
 
         # Broadcast class weights to all ranks
         if world_size > 1:
@@ -264,7 +268,7 @@ def main():
     parser.add_argument('--output_dim', type=int, default=128)
     parser.add_argument('--num_word_layers', type=int, default=5)
     parser.add_argument('--learning_rate', type=float, default=1e-5)
-    parser.add_argument('--epochs', type=int, default=135)
+    parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--patience', type=int, default=20)
     args = parser.parse_args()
     

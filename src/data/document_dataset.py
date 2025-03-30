@@ -86,6 +86,18 @@ class DocumentGraphDataset(Dataset):
         # If no metadata exists, return empty list to trigger processing
         return []
 
+    # Funcion that checks whether any word, sentence attributes or edges are nan
+    def check_nan(self, data: HeteroData) -> bool:
+        if torch.isnan(data['word'].x).any():
+            return True
+        if torch.isnan(data['sentence'].x).any():
+            return True
+        if torch.isnan(data['word', 'co_occurs', 'word'].edge_attr).any():
+            return True
+        if torch.isnan(data['sentence', 'related_to', 'sentence'].edge_attr).any():
+            return True
+        return False
+
     def process(self):
         """Process raw documents into graphs and save them."""
         print("Processing documents...")
@@ -122,7 +134,30 @@ class DocumentGraphDataset(Dataset):
                 # Save using original document index
                 file_path = Path(self.processed_dir) / f'data_{idx}.pt'
                 torch.save(data, file_path)
-                self.valid_indices.append(idx)
+
+                # Add a check to ensure that the graph contains
+                #  word and sentence nodes and word-word and sentence-sentence edges
+                #  Only add to valid indices if the graph is valid
+                # Check for valid graph structure and no NaN values
+                has_valid_structure = (
+                    data['word'].num_nodes > 0 and 
+                    data['sentence'].num_nodes > 0 and
+                    data['word', 'co_occurs', 'word'].edge_index.size(1) > 0 and
+                    data['sentence', 'related_to', 'sentence'].edge_index.size(1) > 0
+                )
+
+                has_nan = self.check_nan(data)
+                if has_valid_structure and not has_nan:
+                    # Only save and add to valid indices if graph is completely valid
+                    file_path = Path(self.processed_dir) / f'data_{idx}.pt'
+                    torch.save(data, file_path)
+                    self.valid_indices.append(idx)
+                    print(f"Valid graph saved for document {idx}")
+                else:
+                    if has_nan:
+                        print(f"NaN values found in graph for document {idx}")
+                    else:
+                        print(f"Invalid graph structure for document {idx}")
                 
             except Exception as e:
                 print(f"Error processing document {idx}: {str(e)}")

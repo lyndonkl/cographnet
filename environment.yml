@@ -13,3 +13,4 @@ dependencies:
   - nltk
   - scikit-learn
   - logging
+  - hyperopt

@@ -87,7 +87,7 @@ class SwigluGatedGraphConv(MessagePassing):
 
 
 class WordGraphNetwork(nn.Module):
-    def __init__(self, in_channels, hidden_channels, num_layers, num_classes):
+    def __init__(self, in_channels, hidden_channels, num_layers, num_classes, dropout_rate=0.3):
         super(WordGraphNetwork, self).__init__()
         # Use the custom GGNN layer (which includes GRU-style updates with SwiGLU)
         self.ggnn = SwigluGatedGraphConv(in_channels, hidden_channels, num_layers)
@@ -99,8 +99,10 @@ class WordGraphNetwork(nn.Module):
 
         # Final MLP for classification (or for fusion with sentence-level output)
         # We combine global max and mean pooling, so input dimension is 2*hidden_channels.
+        self.dropout = nn.Dropout(p=dropout_rate)
         self.mlp = nn.Sequential(
             nn.Linear(2 * hidden_channels, hidden_channels),
+            nn.Dropout(p=dropout_rate),
             nn.ReLU(),
             nn.Linear(hidden_channels, num_classes)
         )
@@ -114,6 +116,7 @@ class WordGraphNetwork(nn.Module):
         """
         # Pass through the GGNN block
         x = self.ggnn(x, edge_index, edge_weight=edge_weight)  # Updated node embeddings: [num_nodes, hidden_channels]
+        x = self.dropout(x)  # Add dropout after GGNN
 
         # Compute attention scores per node.
         att_scores = torch.sigmoid(self.att_gate(x))  # [num_nodes, 1]
@@ -121,6 +124,7 @@ class WordGraphNetwork(nn.Module):
 
         # Apply an additional ReLU transformation.
         x = F.relu(self.att_emb(x))  # [num_nodes, hidden_channels]
+        x = self.dropout(x)  # Add dropout before pooling
 
         # Pooling: compute both global max and mean pooling over nodes for each graph.
         x_max = global_max_pool(x, batch)   # shape: [num_graphs, hidden_channels]
