@@ -24,14 +24,17 @@ class CoGraphTrainer:
         rank: int = 0,
         world_size: int = 1,
         num_epochs: int = 100,
-        class_weights: Optional[torch.Tensor] = None
+        train_class_weights: Optional[torch.Tensor] = None,
+        val_class_weights: Optional[torch.Tensor] = None,
+        test_class_weights: Optional[torch.Tensor] = None
     ):
         self.logger = setup_logger()
         self.rank = rank
         self.world_size = world_size
         self.num_epochs = num_epochs
-        self.class_weights = class_weights
-        
+        self.train_class_weights = train_class_weights
+        self.val_class_weights = val_class_weights
+        self.test_class_weights = test_class_weights
         # Model
         self.model = model
         
@@ -41,7 +44,9 @@ class CoGraphTrainer:
         self.test_loader = test_loader
         
         # Training components
-        self.criterion = FocalLoss(gamma=2.0, weight=self.class_weights)
+        self.train_criterion = FocalLoss(gamma=2.0, weight=self.train_class_weights)
+        self.val_criterion = FocalLoss(gamma=2.0, weight=self.val_class_weights)
+        self.test_criterion = FocalLoss(gamma=2.0, weight=self.test_class_weights)
         self.optimizer = Adam(
             filter(lambda p: p.requires_grad, model.parameters()), 
             lr=learning_rate, 
@@ -158,7 +163,7 @@ class CoGraphTrainer:
                 batch.y = batch.y.to(torch.long)
                 batch_size = batch.y.size(0)
                 
-                loss = self.criterion(outputs[:batch_size], batch.y[:batch_size])
+                loss = self.train_criterion(outputs[:batch_size], batch.y[:batch_size])
                 loss = loss / accumulation_steps  # Scale loss for accumulation
                 # Break after printting
                 # WHen loss is nan print outputs and any nan gradients if they exist
@@ -272,7 +277,7 @@ class CoGraphTrainer:
                 batch = batch.to(self.device)
                 batch_size = batch.y.size(0)
                 
-                loss = self.criterion(outputs[:batch_size], batch.y[:batch_size])
+                loss = self.val_criterion(outputs[:batch_size], batch.y[:batch_size])
                 
                 # Calculate accuracy
                 pred = torch.softmax(outputs[:batch_size], dim=1).argmax(dim=1)
@@ -316,7 +321,7 @@ class CoGraphTrainer:
                 batch = batch.to(self.device)
                 batch_size = batch.y.size(0)
                 
-                loss = self.criterion(outputs[:batch_size], batch.y[:batch_size])
+                loss = self.test_criterion(outputs[:batch_size], batch.y[:batch_size])
                 
                 # Calculate accuracy
                 pred = torch.softmax(outputs[:batch_size], dim=1).argmax(dim=1)

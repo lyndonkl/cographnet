@@ -1,0 +1,2 @@
+Best hyperparameters: {'batch_size': 16.0, 'dropout_rate': 0.16716698278231815, 'gamma': 4.872290015122648, 'hidden_dim': 148.0, 'learning_rate': 0.000363022060695821, 'num_layers': 3.0, 'weight_decay': 2.7910370279837748e-08}
+

@@ -5,7 +5,17 @@ from .layers.sentence import SentenceGraphNetwork
 from .layers.fusion import FusionLayer
 
 class CoGraphNet(nn.Module):
-    def __init__(self, word_in_channels, sent_in_channels, hidden_channels, num_layers, num_classes, dropout_rate=0.3):
+    def __init__(
+        self,
+        word_in_channels,
+        sent_in_channels,
+        hidden_channels,
+        num_word_layers,
+        num_sent_layers,
+        num_classes,
+        dropout_rate=None,
+        dropout_config=None
+    ):
         """
         CoGraphNet integrates word-level and sentence-level graph neural networks,
         and fuses their outputs.
@@ -14,18 +24,37 @@ class CoGraphNet(nn.Module):
             word_in_channels (int): Input feature dimension for word nodes.
             sent_in_channels (int): Input feature dimension for sentence nodes.
             hidden_channels (int): Hidden feature dimension.
-            num_layers (int): Number of propagation layers / GRU layers.
+            num_word_layers (int): Number of propagation layers / GRU layers for word graph.
+            num_sent_layers (int): Number of propagation layers / GRU layers for sentence graph.
             num_classes (int): Number of output classes.
         """
         super(CoGraphNet, self).__init__()
-        self.word_net = WordGraphNetwork(word_in_channels, hidden_channels, 2, num_classes, dropout_rate)
-        self.sent_net = SentenceGraphNetwork(sent_in_channels, hidden_channels, 2, num_classes, dropout_rate)
-        self.fusion = FusionLayer(dropout_rate=dropout_rate)
-        self.dropout = nn.Dropout(p=dropout_rate)
+
+        if dropout_config is None:
+            dropout_config = {
+                'word': True,
+                'sent': True,
+                'fusion': True,
+                'co_graph': True,
+                'final': True
+            }
+
+        if dropout_rate is None:
+            dropout_rate = {
+                'word': 0.3,
+                'sent': 0.3,
+                'fusion': 0.3,
+                'co_graph': 0.3,
+                'final': 0.3
+            }
+        self.word_net = WordGraphNetwork(word_in_channels, hidden_channels, num_word_layers, num_classes, dropout_rate['word'] if dropout_config['word'] else 0)
+        self.sent_net = SentenceGraphNetwork(sent_in_channels, hidden_channels, num_sent_layers, num_classes, dropout_rate['sent'] if dropout_config['sent'] else 0)
+        self.fusion = FusionLayer(dropout_rate=dropout_rate['fusion'] if dropout_config['fusion'] else 0)
+        self.dropout = nn.Dropout(p=dropout_rate['co_graph'] if dropout_config['co_graph'] else 0)
         # Optional final classification layer after fusion.
         self.final_mlp = nn.Sequential(
             nn.Linear(num_classes, num_classes),
-            nn.Dropout(p=dropout_rate)
+            nn.Dropout(p=dropout_rate['final'] if dropout_config['final'] else 0)
         )
     
     def forward(self, word_x, word_edge_index, word_batch, word_edge_weight,
