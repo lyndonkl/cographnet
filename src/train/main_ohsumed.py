@@ -122,14 +122,33 @@ def train_distributed(rank: int, world_size: int, args):
             rank=rank,
             val_split=0.2  # 80-20 split for train-val
         )
+
+        dropout_rate = {
+            'word': 0.3,
+            'sent': 0.3,
+            'fusion': 0.3,
+            'co_graph': 0.3,
+            'final': 0.3
+        }
+
+        dropout_config = {
+            'word': True,
+            'sent': True,
+            'fusion': True,
+            'co_graph': True,
+            'final': True
+        }
         
         # Create model
         model = CoGraphNet(
             word_in_channels=args.input_dim,
             sent_in_channels=args.input_dim,
             hidden_channels=args.hidden_dim,
-            num_layers=args.num_word_layers,
-            num_classes=num_classes
+            num_word_layers=args.num_word_layers,
+            num_sent_layers=args.num_sent_layers,
+            num_classes=num_classes,
+            dropout_rate=dropout_rate,
+            dropout_config=dropout_config
         )
 
         # Determine the device for training
@@ -146,21 +165,41 @@ def train_distributed(rank: int, world_size: int, args):
             monitor='val_loss'
         )
 
-        patience_per_stage = {"sentence": 10, "word": 10, "fusion": 5, "fine_tune": 5}
+        patience_per_stage = {"sentence": 20, "word": 20, "fusion": 20, "fine_tune": 20}
         early_stopping = {stage: EarlyStopping(patience=patience) for stage, patience in patience_per_stage.items()} 
         # Compute class weights only on rank 0
-        class_weights = compute_class_weights(
+        train_class_weights = compute_class_weights(
             train_loader,
             num_classes,
             device="cuda" if torch.cuda.is_available() else "cpu",
             rank=rank,
             world_size=world_size
         )
-        print(f"Class weights: {class_weights}")
+        print(f"Train class weights: {train_class_weights}")
+
+        val_class_weights = compute_class_weights(
+            val_loader,
+            num_classes,
+            device="cuda" if torch.cuda.is_available() else "cpu",
+            rank=rank,
+            world_size=world_size
+        )
+
+        print(f"Val class weights: {val_class_weights}")
+
+        test_class_weights = compute_class_weights(
+            test_loader,
+            num_classes,
+            device="cuda" if torch.cuda.is_available() else "cpu",
+            rank=rank,
+            world_size=world_size
+        )
+
+        print(f"Test class weights: {test_class_weights}")
 
         # Broadcast class weights to all ranks
         if world_size > 1:
-            dist.broadcast(class_weights, src=0)
+            dist.broadcast(train_class_weights, src=0)
             torch.distributed.barrier()  # Sync all ranks before continuing
 
         
@@ -174,7 +213,9 @@ def train_distributed(rank: int, world_size: int, args):
             rank=rank,
             world_size=world_size,
             num_epochs=args.epochs,
-            class_weights=class_weights
+            train_class_weights=train_class_weights,
+            val_class_weights=val_class_weights,
+            test_class_weights=test_class_weights
         )
         
         # Train
@@ -267,6 +308,7 @@ def main():
     parser.add_argument('--hidden_dim', type=int, default=256)
     parser.add_argument('--output_dim', type=int, default=128)
     parser.add_argument('--num_word_layers', type=int, default=5)
+    parser.add_argument('--num_sent_layers', type=int, default=5)
     parser.add_argument('--learning_rate', type=float, default=1e-5)
     parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--patience', type=int, default=20)
