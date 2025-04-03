@@ -6,15 +6,15 @@ from torch.nn.parallel import DistributedDataParallel
 import warnings
 import urllib3
 import torch.utils.data
+from collections import defaultdict
 
 from ..models import CoGraphNet
 from ..data.document_dataset_ohsumed import create_dataloaders_ohsumed
 from .trainer import CoGraphTrainer
 from .distributed import setup_distributed, cleanup_distributed
 from .training_utils import EarlyStopping, ModelCheckpoint
-from .utils import setup_logger
+from .utils import setup_logger, plot_overall_metrics
 import torch.distributed as dist
-
 
 from sklearn.utils.class_weight import compute_class_weight
 import numpy as np
@@ -86,11 +86,11 @@ def compute_class_weights(train_loader, num_classes, device, rank, world_size):
     return class_weights_tensor
 
 def get_training_stage(epoch):
-    if epoch < 25:
+    if epoch < 100:
         return "sentence"
-    elif epoch < 50:
+    elif epoch < 200:
         return "word"
-    elif epoch < 75:
+    elif epoch < 300:
         return "fusion"
     else:
         return "fine_tune"
@@ -123,23 +123,24 @@ def train_distributed(rank: int, world_size: int, args):
             val_split=0.2  # 80-20 split for train-val
         )
 
+        # Optimized dropout configuration
         dropout_rate = {
-            'word': 0.3,
-            'sent': 0.3,
-            'fusion': 0.3,
-            'co_graph': 0.3,
-            'final': 0.3
+            'word': 0.3743377153261378,
+            'sent': 0.3934874479157007,
+            'fusion': 0.237207820271752,
+            'co_graph': 0.20629930383280137,
+            'final': 0.239952468532074
         }
 
         dropout_config = {
-            'word': True,
-            'sent': True,
-            'fusion': True,
-            'co_graph': True,
-            'final': True
+            'word': True,      # dropout_word_enabled = 1
+            'sent': False,     # dropout_sent_enabled = 0
+            'fusion': True,    # dropout_fusion_enabled = 1
+            'co_graph': False, # dropout_co_graph_enabled = 0
+            'final': False     # dropout_final_enabled = 0
         }
         
-        # Create model
+        # Create model with optimized parameters
         model = CoGraphNet(
             word_in_channels=args.input_dim,
             sent_in_channels=args.input_dim,
@@ -203,20 +204,27 @@ def train_distributed(rank: int, world_size: int, args):
             torch.distributed.barrier()  # Sync all ranks before continuing
 
         
-        # Create trainer
+        # Create trainer with optimized parameters
         trainer = CoGraphTrainer(
             model=model,
             train_loader=train_loader,
             val_loader=val_loader,
             test_loader=test_loader,
             learning_rate=args.learning_rate,
+            weight_decay=args.weight_decay,
             rank=rank,
             world_size=world_size,
             num_epochs=args.epochs,
             train_class_weights=train_class_weights,
             val_class_weights=val_class_weights,
-            test_class_weights=test_class_weights
+            test_class_weights=test_class_weights,
+            gamma=args.gamma,
+            plot_dir=os.path.join(args.save_dir, 'plots'),
+            num_classes=num_classes
         )
+        
+        # Track metrics across phases
+        overall_metrics = defaultdict(list)
         
         # Train
         epoch = 0
@@ -226,13 +234,13 @@ def train_distributed(rank: int, world_size: int, args):
             if epoch == 0:
                 trainer.freeze_all_except_sentence()
                 trainer.optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, trainer.model.parameters()), lr=1e-4)
-            elif epoch == 25:
+            elif epoch == 100:
                 trainer.freeze_all_except_word()
                 trainer.optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, trainer.model.parameters()), lr=1e-4)
-            elif epoch == 50:
+            elif epoch == 200:
                 trainer.freeze_all_except_fusion()
                 trainer.optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, trainer.model.parameters()), lr=5e-3)
-            elif epoch == 75:
+            elif epoch == 300:
                 trainer.unfreeze_all()
                 trainer.optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, trainer.model.parameters()), lr=5e-3)
 
@@ -240,10 +248,10 @@ def train_distributed(rank: int, world_size: int, args):
             train_loader.sampler.set_epoch(epoch)
             val_loader.sampler.set_epoch(epoch)
             
-            train_loss = trainer.train_epoch(epoch)
+            train_loss = trainer.train_epoch(epoch, stage)
             torch.distributed.barrier()
             
-            val_loss, val_acc = trainer.validate()
+            val_loss, val_acc = trainer.validate(epoch, stage)
             torch.distributed.barrier()
             
             if stage in ["fusion", "fine_tune"]:
@@ -254,6 +262,19 @@ def train_distributed(rank: int, world_size: int, args):
             if rank == 0:
                 metrics = {'val_loss': val_loss, 'val_acc': val_acc}
                 checkpoint(model, metrics)
+                
+                # Track metrics for plotting
+                overall_metrics['train_loss'].append(train_loss)
+                overall_metrics['val_loss'].append(val_loss)
+                overall_metrics['val_acc'].append(val_acc)
+                
+                # Plot overall metrics
+                plot_overall_metrics(
+                    overall_metrics,
+                    stage,
+                    epoch,
+                    os.path.join(args.save_dir, 'plots')
+                )
                 
                 logger.info(
                     f'Epoch {epoch}: '
@@ -272,7 +293,7 @@ def train_distributed(rank: int, world_size: int, args):
                         logger.info(f"Early stopping triggered at epoch {epoch}. Ending training.")
                     break
                 else:
-                    next_stage_start_epoch = 25 if stage == "sentence" else 50 if stage == "word" else 75
+                    next_stage_start_epoch = 100 if stage == "sentence" else 200 if stage == "word" else 300
                     if rank == 0:
                         logger.info(f"Early stopping triggered for stage {stage} at epoch {epoch}. Moving to next stage {get_training_stage(next_stage_start_epoch)}.")
                     epoch = next_stage_start_epoch  # Move to next stage start
@@ -303,20 +324,22 @@ def main():
     parser.add_argument('--processed_graphs_dir', type=str, default='processed_graphs_ohsumed',
                       help='Directory to store processed graph data')
     parser.add_argument('--save_dir', type=str, default='checkpoints_ohsumed')
-    parser.add_argument('--batch_size', type=int, default=1)
+    parser.add_argument('--batch_size', type=int, default=48)
     parser.add_argument('--input_dim', type=int, default=768)
-    parser.add_argument('--hidden_dim', type=int, default=256)
-    parser.add_argument('--output_dim', type=int, default=128)
-    parser.add_argument('--num_word_layers', type=int, default=5)
-    parser.add_argument('--num_sent_layers', type=int, default=5)
-    parser.add_argument('--learning_rate', type=float, default=1e-5)
-    parser.add_argument('--epochs', type=int, default=100)
+    parser.add_argument('--hidden_dim', type=int, default=111)
+    parser.add_argument('--num_word_layers', type=int, default=1)
+    parser.add_argument('--num_sent_layers', type=int, default=1)
+    parser.add_argument('--learning_rate', type=float, default=0.0009841767327191644)
+    parser.add_argument('--weight_decay', type=float, default=2.646938537392353e-08)
+    parser.add_argument('--gamma', type=float, default=3.1139542593286)
+    parser.add_argument('--epochs', type=int, default=400)
     parser.add_argument('--patience', type=int, default=20)
     args = parser.parse_args()
     
     # Create directories
     os.makedirs(args.save_dir, exist_ok=True)
     os.makedirs(args.processed_graphs_dir, exist_ok=True)
+    os.makedirs(os.path.join(args.save_dir, 'plots'), exist_ok=True)
     
     # Use CPU cores for distributed training
     world_size = mp.cpu_count()
