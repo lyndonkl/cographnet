@@ -94,7 +94,7 @@ class CoGraphTrainer:
         dist.all_gather(all_corrects, correct_tensor)
         
         # Sum across processes
-        total_loss = sum(l.item() for l in all_losses)
+        total_loss = sum(l.item() for l in all_losses) / self.world_size
         total_samples = sum(s.item() for s in all_samples)
         total_correct = sum(c.item() for c in all_corrects)
         
@@ -269,8 +269,12 @@ class CoGraphTrainer:
                         'epoch': f'{epoch}/{self.num_epochs}'  # Add epoch counter
                     })
         
+        torch.distributed.barrier()
         # Gather metrics from all processes
+        # Divide total loss by number of batches
+        total_loss = total_loss / len(self.train_loader)
         total_loss, total_samples, _ = self._gather_metrics(total_loss, total_samples)
+        torch.distributed.barrier()
         
         # Plot unique classes per batch on rank 0
         if self.rank == 0:
@@ -284,7 +288,7 @@ class CoGraphTrainer:
                 self.plot_dir
             )
         
-        return total_loss / total_samples
+        return total_loss
     
     def validate(self, epoch: int, phase: int) -> Tuple[float, float]:
         """Validate the model on the validation set."""
@@ -333,11 +337,14 @@ class CoGraphTrainer:
                 total_loss += loss.item()
                 total_samples += batch_size
         
+        torch.distributed.barrier()
         # Gather metrics from all processes
+        # Divide total loss by number of batches
+        total_loss = total_loss / len(self.val_loader)
         total_loss, total_samples, correct = self._gather_metrics(
             total_loss, total_samples, correct
         )
-        
+        torch.distributed.barrier()
         # Plot validation metrics on rank 0
         if self.rank == 0:
             # Concatenate logits and compute probabilities
@@ -376,7 +383,7 @@ class CoGraphTrainer:
             ece = compute_ece(all_probs, all_labels_np)
             self.logger.info(f"[Phase {phase}, Epoch {epoch+1}] Expected Calibration Error (ECE): {ece:.4f}")
         
-        return total_loss / total_samples, correct / total_samples
+        return total_loss, correct / total_samples
     
     def test(self) -> Tuple[float, float]:
         """Test the model on the test set."""
@@ -416,11 +423,14 @@ class CoGraphTrainer:
                 total_samples += batch_size
         
         # Gather metrics from all processes
+        # Divide total loss by number of batches
+        total_loss = total_loss / len(self.test_loader)
+        torch.distributed.barrier()
         total_loss, total_samples, correct = self._gather_metrics(
             total_loss, total_samples, correct
         )
-        
-        return total_loss / total_samples, correct / total_samples
+        torch.distributed.barrier()
+        return total_loss, correct / total_samples
         
         # Final test if test loader provided
         if self.test_loader:
