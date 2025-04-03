@@ -21,20 +21,19 @@ def setup_logger() -> logging.Logger:
 
 def compute_ece(probs: np.ndarray, labels: np.ndarray, n_bins: int = 10) -> float:
     """Compute Expected Calibration Error."""
-    bin_edges = np.linspace(0, 1, n_bins + 1)
-    bin_indices = np.digitize(probs, bin_edges) - 1
-    
-    ece = 0
-    for bin_idx in range(n_bins):
-        mask = bin_indices == bin_idx
-        if np.sum(mask) > 0:
-            bin_probs = probs[mask]
-            bin_labels = labels[mask]
-            bin_acc = np.mean(bin_labels == np.argmax(bin_probs, axis=1))
-            bin_conf = np.mean(np.max(bin_probs, axis=1))
-            bin_size = np.sum(mask)
-            ece += np.abs(bin_acc - bin_conf) * (bin_size / len(labels))
-    
+    bins = np.linspace(0.0, 1.0, n_bins + 1)
+    ece = 0.0
+    max_probs = probs.max(axis=1)
+    pred_labels = probs.argmax(axis=1)
+    for i in range(n_bins):
+        bin_lower = bins[i]
+        bin_upper = bins[i+1]
+        in_bin = (max_probs > bin_lower) & (max_probs <= bin_upper)
+        prop_in_bin = np.mean(in_bin)
+        if prop_in_bin > 0:
+            accuracy_in_bin = np.mean(labels[in_bin] == pred_labels[in_bin])
+            avg_confidence_in_bin = np.mean(max_probs[in_bin])
+            ece += np.abs(avg_confidence_in_bin - accuracy_in_bin) * prop_in_bin
     return ece
 
 def plot_reliability_diagram(
@@ -44,39 +43,36 @@ def plot_reliability_diagram(
     save_path: Optional[str] = None
 ) -> None:
     """Plot reliability diagram for model calibration."""
-    bin_edges = np.linspace(0, 1, n_bins + 1)
-    bin_indices = np.digitize(probs, bin_edges) - 1
-    
-    bin_accs = []
-    bin_confs = []
-    bin_sizes = []
-    
-    for bin_idx in range(n_bins):
-        mask = bin_indices == bin_idx
-        if np.sum(mask) > 0:
-            bin_probs = probs[mask]
-            bin_labels = labels[mask]
-            bin_acc = np.mean(bin_labels == np.argmax(bin_probs, axis=1))
-            bin_conf = np.mean(np.max(bin_probs, axis=1))
-            bin_size = np.sum(mask)
-            bin_accs.append(bin_acc)
-            bin_confs.append(bin_conf)
-            bin_sizes.append(bin_size)
-    
-    plt.figure(figsize=(8, 8))
-    plt.plot([0, 1], [0, 1], 'k--', label='Perfect Calibration')
-    plt.plot(bin_confs, bin_accs, 'o-', label='Model Calibration')
-    plt.fill_between(bin_confs, bin_accs, bin_confs, alpha=0.2)
-    plt.xlabel('Confidence')
-    plt.ylabel('Accuracy')
-    plt.title('Reliability Diagram')
+    bins = np.linspace(0.0, 1.0, n_bins + 1)
+    bin_centers = (bins[:-1] + bins[1:]) / 2.0
+    max_probs = probs.max(axis=1)
+    pred_labels = probs.argmax(axis=1)
+    accuracies = []
+    confidences = []
+    for i in range(n_bins):
+        bin_lower = bins[i]
+        bin_upper = bins[i+1]
+        in_bin = (max_probs > bin_lower) & (max_probs <= bin_upper)
+        if np.sum(in_bin) > 0:
+            accuracy = np.mean(labels[in_bin] == pred_labels[in_bin])
+            confidence = np.mean(max_probs[in_bin])
+        else:
+            accuracy = 0.0
+            confidence = 0.0
+        accuracies.append(accuracy)
+        confidences.append(confidence)
+    plt.figure(figsize=(8, 6))
+    plt.plot(bin_centers, accuracies, marker='o', label="Empirical Accuracy")
+    plt.plot(bin_centers, confidences, marker='s', label="Average Confidence")
+    plt.plot([0, 1], [0, 1], linestyle='--', color='gray', label="Perfect Calibration")
+    plt.xlabel("Confidence")
+    plt.ylabel("Accuracy")
+    plt.title("Reliability Diagram")
     plt.legend()
-    
+    plt.grid(True)
     if save_path:
         plt.savefig(save_path)
-        plt.close()
-    else:
-        plt.show()
+    plt.close()
 
 def plot_prediction_distribution(
     predictions: List[int],
