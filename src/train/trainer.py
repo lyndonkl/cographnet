@@ -225,6 +225,7 @@ class CoGraphTrainer:
 
                 # Accumulate loss for tracking
                 accumulated_loss += loss.item()
+                total_loss += loss.item()
                 total_samples += batch_size
 
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
@@ -245,11 +246,6 @@ class CoGraphTrainer:
 
                     self.optimizer.step()
                     self.optimizer.zero_grad()  # Clear accumulated gradients
-
-                    # Accumulate loss across all processes
-                    loss_tensor = torch.tensor([accumulated_loss], device=self.device)
-                    torch.distributed.all_reduce(loss_tensor, op=torch.distributed.ReduceOp.SUM)
-                    total_loss += loss_tensor.item()  # Accumulate the reduced loss
 
                     torch.distributed.barrier()
                     for param in self.model.parameters():
