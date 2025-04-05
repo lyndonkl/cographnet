@@ -5,7 +5,7 @@ from dataclasses import dataclass
 @dataclass
 class EarlyStopping:
     """Early stopping utility with distributed training support."""
-    patience: int = 7
+    patience: int = 20
     min_delta: float = 0.0
     counter: int = 0
     best_loss: Optional[float] = None
