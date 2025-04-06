@@ -281,6 +281,8 @@ def create_dataloaders_ohsumed(
     # **Broadcast split indices to all ranks**
     train_idx_list = [train_idx] if rank == 0 else [None]
     val_idx_list = [val_idx] if rank == 0 else [None]
+    
+    barrier()
 
     broadcast_object_list(train_idx_list, src=0)
     broadcast_object_list(val_idx_list, src=0)

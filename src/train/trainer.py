@@ -415,7 +415,7 @@ class CoGraphTrainer:
                 correct += pred.eq(batch.y[:batch_size]).sum().item()
                 
                 # Update metrics
-                total_loss += loss.item() * batch_size
+                total_loss += loss.item()
                 total_samples += batch_size
         
         # Gather metrics from all processes

@@ -19,3 +19,13 @@ Best hyperparameters: {
     'num_word_layers': np.float64(1.0),
     'weight_decay': np.float64(2.646938537392353e-08)
 }
+
+Best hyperparameters: {
+    'batch_size': np.float64(160.0),
+    'gamma': np.float64(4.927580818892459),
+    'hidden_dim': np.float64(141.0),
+    'learning_rate': np.float64(0.0009176112161191966),
+    'num_sentence_layers': np.float64(1.0),
+    'num_word_layers': np.float64(1.0),
+    'weight_decay': np.float64(7.642829520102216e-07)
+}
