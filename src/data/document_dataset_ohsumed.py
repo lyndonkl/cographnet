@@ -14,6 +14,12 @@ from torch.distributed import broadcast_object_list, barrier
 
 warnings.filterwarnings("ignore", message="You are using `torch.load` with `weights_only=False`")
 
+def excluded_classes():
+    return {
+        'C17', 'C05', 'C13', 'C15', 'C16', 'C19',
+        'C11', 'C02', 'C09', 'C07', 'C22', 'C03'
+    }
+
 class OhsumedDocumentGraphDataset(Dataset):
     """Dataset for loading processed OHSUMED documents and converting them to graph representations."""
     
@@ -46,11 +52,16 @@ class OhsumedDocumentGraphDataset(Dataset):
             with open(file, 'r', encoding='utf-8') as f:
                 try:
                     doc = json.load(f)
-                    if 'text' in doc and 'category' in doc and doc['text'].strip() and doc['category'].strip():
+                    if ('text' in doc and 
+                        'category' in doc and 
+                        doc['text'].strip() and 
+                        doc['category'].strip() and 
+                        doc['category'] not in excluded_classes()):
                         self.documents.append(doc)
                         self.categories.add(doc['category'])
                     else:
-                        print(f"Skipping invalid document in {file}: missing text or category")
+                        # print(f"Skipping invalid document in {file}: missing text or category")
+                        continue
                 except json.JSONDecodeError:
                     print(f"Skipping invalid JSON file: {file}")
                 except Exception as e:
@@ -139,7 +150,8 @@ class OhsumedDocumentGraphDataset(Dataset):
                     data['word'].num_nodes > 0 and 
                     data['sentence'].num_nodes > 0 and
                     data['word', 'co_occurs', 'word'].edge_index.size(1) > 0 and
-                    data['sentence', 'related_to', 'sentence'].edge_index.size(1) > 0
+                    data['sentence', 'related_to', 'sentence'].edge_index.size(1) > 0 and
+                    doc['category'] not in excluded_classes()
                 )
 
                 has_nan = self.check_nan(data)
@@ -211,7 +223,7 @@ def get_all_categories(train_dir: str, test_dir: str) -> Set[str]:
         for file in Path(data_dir).glob('*.json'):
             with open(file, 'r', encoding='utf-8') as f:
                 doc = json.load(f)
-                if 'text' in doc and 'category' in doc and doc['text'].strip() and doc['category'].strip():
+                if 'text' in doc and 'category' in doc and doc['text'].strip() and doc['category'].strip() and doc['category'] not in excluded_classes():
                     categories.add(doc['category'])
 
     return categories

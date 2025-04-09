@@ -125,19 +125,19 @@ def train_distributed(rank: int, world_size: int, args):
 
         # Optimized dropout configuration
         dropout_rate = {
-            'word': 0.3743377153261378,
-            'sent': 0.3934874479157007,
-            'fusion': 0.237207820271752,
-            'co_graph': 0.20629930383280137,
-            'final': 0.239952468532074
+            'word': 0.10153961499724717,
+            'sent': 0.49983181148361827,
+            'fusion': 0.2793752346399807,
+            'co_graph': 0.3705597800069226,
+            'final': 0.13211666028004773
         }
 
         dropout_config = {
-            'word': True,      # dropout_word_enabled = 1
-            'sent': False,     # dropout_sent_enabled = 0
-            'fusion': True,    # dropout_fusion_enabled = 1
+            'word': False,      # dropout_word_enabled = 1
+            'sent': True,     # dropout_sent_enabled = 0
+            'fusion': False,    # dropout_fusion_enabled = 1
             'co_graph': False, # dropout_co_graph_enabled = 0
-            'final': False     # dropout_final_enabled = 0
+            'final': True     # dropout_final_enabled = 0
         }
         
         # Create model with optimized parameters
@@ -324,14 +324,14 @@ def main():
     parser.add_argument('--processed_graphs_dir', type=str, default='processed_graphs_ohsumed',
                       help='Directory to store processed graph data')
     parser.add_argument('--save_dir', type=str, default='checkpoints_ohsumed')
-    parser.add_argument('--batch_size', type=int, default=48)
+    parser.add_argument('--batch_size', type=int, default=16)
     parser.add_argument('--input_dim', type=int, default=768)
-    parser.add_argument('--hidden_dim', type=int, default=111)
-    parser.add_argument('--num_word_layers', type=int, default=3)
-    parser.add_argument('--num_sent_layers', type=int, default=1)
-    parser.add_argument('--learning_rate', type=float, default=0.090841767327191644)
-    parser.add_argument('--weight_decay', type=float, default=2.646938537392353e-08)
-    parser.add_argument('--gamma', type=float, default=3.1139542593286)
+    parser.add_argument('--hidden_dim', type=int, default=249)
+    parser.add_argument('--num_word_layers', type=int, default=1)
+    parser.add_argument('--num_sent_layers', type=int, default=2)
+    parser.add_argument('--learning_rate', type=float, default=0.00015859601405589384)
+    parser.add_argument('--weight_decay', type=float, default=9.512067216547271e-08)
+    parser.add_argument('--gamma', type=float, default=4.429965938897787)
     parser.add_argument('--epochs', type=int, default=1200)
     parser.add_argument('--patience', type=int, default=20)
     args = parser.parse_args()
