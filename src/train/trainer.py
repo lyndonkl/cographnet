@@ -3,6 +3,7 @@ from typing import Optional, Tuple
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.distributed as dist
 from torch.optim import Adam
 from torch.optim.lr_scheduler import ReduceLROnPlateau
@@ -15,7 +16,6 @@ from .utils import (
     plot_prediction_distribution, plot_class_distribution,
     plot_unique_classes_per_batch
 )
-from .focal_loss import FocalLoss
 
 class CoGraphTrainer:
     def __init__(
@@ -57,10 +57,10 @@ class CoGraphTrainer:
         self.val_loader = val_loader
         self.test_loader = test_loader
         
-        # Training components
-        self.train_criterion = FocalLoss(gamma=gamma, weight=self.train_class_weights)
-        self.val_criterion = FocalLoss(gamma=gamma, weight=self.val_class_weights)
-        self.test_criterion = FocalLoss(gamma=gamma, weight=self.test_class_weights)
+        # Training components - using cross entropy loss directly
+        self.train_criterion = lambda logits, targets: F.cross_entropy(logits, targets)
+        self.val_criterion = lambda logits, targets: F.cross_entropy(logits, targets)
+        self.test_criterion = lambda logits, targets: F.cross_entropy(logits, targets)
         self.optimizer = Adam(
             filter(lambda p: p.requires_grad, model.parameters()), 
             lr=learning_rate, 

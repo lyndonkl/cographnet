@@ -168,40 +168,40 @@ def train_distributed(rank: int, world_size: int, args):
 
         patience_per_stage = {"sentence": 20, "word": 20, "fusion": 20, "fine_tune": 20}
         early_stopping = {stage: EarlyStopping(patience=patience) for stage, patience in patience_per_stage.items()} 
-        # Compute class weights only on rank 0
-        train_class_weights = compute_class_weights(
-            train_loader,
-            num_classes,
-            device="cuda" if torch.cuda.is_available() else "cpu",
-            rank=rank,
-            world_size=world_size
-        )
-        print(f"Train class weights: {train_class_weights}")
+        # # Compute class weights only on rank 0
+        # train_class_weights = compute_class_weights(
+        #     train_loader,
+        #     num_classes,
+        #     device="cuda" if torch.cuda.is_available() else "cpu",
+        #     rank=rank,
+        #     world_size=world_size
+        # )
+        # print(f"Train class weights: {train_class_weights}")
 
-        val_class_weights = compute_class_weights(
-            val_loader,
-            num_classes,
-            device="cuda" if torch.cuda.is_available() else "cpu",
-            rank=rank,
-            world_size=world_size
-        )
+        # val_class_weights = compute_class_weights(
+        #     val_loader,
+        #     num_classes,
+        #     device="cuda" if torch.cuda.is_available() else "cpu",
+        #     rank=rank,
+        #     world_size=world_size
+        # )
 
-        print(f"Val class weights: {val_class_weights}")
+        # print(f"Val class weights: {val_class_weights}")
 
-        test_class_weights = compute_class_weights(
-            test_loader,
-            num_classes,
-            device="cuda" if torch.cuda.is_available() else "cpu",
-            rank=rank,
-            world_size=world_size
-        )
+        # test_class_weights = compute_class_weights(
+        #     test_loader,
+        #     num_classes,
+        #     device="cuda" if torch.cuda.is_available() else "cpu",
+        #     rank=rank,
+        #     world_size=world_size
+        # )
 
-        print(f"Test class weights: {test_class_weights}")
+        # print(f"Test class weights: {test_class_weights}")
 
         # Broadcast class weights to all ranks
-        if world_size > 1:
-            dist.broadcast(train_class_weights, src=0)
-            torch.distributed.barrier()  # Sync all ranks before continuing
+        # if world_size > 1:
+        #     dist.broadcast(train_class_weights, src=0)
+        #     torch.distributed.barrier()  # Sync all ranks before continuing
 
         
         # Create trainer with optimized parameters
@@ -215,10 +215,6 @@ def train_distributed(rank: int, world_size: int, args):
             rank=rank,
             world_size=world_size,
             num_epochs=args.epochs,
-            train_class_weights=train_class_weights,
-            val_class_weights=val_class_weights,
-            test_class_weights=test_class_weights,
-            gamma=args.gamma,
             plot_dir=os.path.join(args.save_dir, 'plots'),
             num_classes=num_classes
         )
@@ -233,16 +229,16 @@ def train_distributed(rank: int, world_size: int, args):
             
             if epoch == 0:
                 trainer.freeze_all_except_sentence()
-                trainer.optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, trainer.model.parameters()), lr=1e-4)
+                trainer.optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, trainer.model.parameters()), lr=args.learning_rate)
             elif epoch == 300:
                 trainer.freeze_all_except_word()
-                trainer.optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, trainer.model.parameters()), lr=1e-4)
+                trainer.optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, trainer.model.parameters()), lr=args.learning_rate)
             elif epoch == 600:
                 trainer.freeze_all_except_fusion()
-                trainer.optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, trainer.model.parameters()), lr=5e-3)
+                trainer.optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, trainer.model.parameters()), lr=args.learning_rate)
             elif epoch == 900:
                 trainer.unfreeze_all()
-                trainer.optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, trainer.model.parameters()), lr=5e-3)
+                trainer.optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, trainer.model.parameters()), lr=args.learning_rate * 0.0001)
 
             # Set epoch for distributed sampling
             train_loader.sampler.set_epoch(epoch)

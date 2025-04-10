@@ -55,8 +55,7 @@ class OhsumedDocumentGraphDataset(Dataset):
                     if ('text' in doc and 
                         'category' in doc and 
                         doc['text'].strip() and 
-                        doc['category'].strip() and 
-                        doc['category'] not in excluded_classes()):
+                        doc['category'].strip()):
                         self.documents.append(doc)
                         self.categories.add(doc['category'])
                     else:
@@ -150,8 +149,7 @@ class OhsumedDocumentGraphDataset(Dataset):
                     data['word'].num_nodes > 0 and 
                     data['sentence'].num_nodes > 0 and
                     data['word', 'co_occurs', 'word'].edge_index.size(1) > 0 and
-                    data['sentence', 'related_to', 'sentence'].edge_index.size(1) > 0 and
-                    doc['category'] not in excluded_classes()
+                    data['sentence', 'related_to', 'sentence'].edge_index.size(1) > 0
                 )
 
                 has_nan = self.check_nan(data)
@@ -223,7 +221,7 @@ def get_all_categories(train_dir: str, test_dir: str) -> Set[str]:
         for file in Path(data_dir).glob('*.json'):
             with open(file, 'r', encoding='utf-8') as f:
                 doc = json.load(f)
-                if 'text' in doc and 'category' in doc and doc['text'].strip() and doc['category'].strip() and doc['category'] not in excluded_classes():
+                if 'text' in doc and 'category' in doc and doc['text'].strip() and doc['category'].strip():
                     categories.add(doc['category'])
 
     return categories
@@ -240,8 +238,7 @@ def create_dataloaders_ohsumed(
     **dataset_kwargs
 ) -> Tuple[DataLoader, DataLoader, DataLoader, int]:
     """
-    Create DataLoader instances for train, validation and test sets.
-    
+    Create DataLoader instances for train, validation and test sets with balanced sampling.
     Args:
         root: Root directory where processed graphs will be saved
         train_dir: Directory containing training documents
@@ -278,28 +275,44 @@ def create_dataloaders_ohsumed(
 
     # Extract labels for stratified split
     labels = [train_full_dataset[i].y.item() for i in range(len(train_full_dataset))]
-
-    # **Only Rank 0 performs Stratified Split**
+    
+    # Get indices for each class
+    class_indices = {i: [] for i in range(num_classes)}
+    for idx, label in enumerate(labels):
+        class_indices[label].append(idx)
+    
+    # Find minimum class size
+    min_class_size = min(len(indices) for indices in class_indices.values())
+    
     if rank == 0:
+        # Balance classes by taking equal numbers from each
+        balanced_indices = []
+        for class_idx in class_indices:
+            # Randomly sample min_class_size indices from each class
+            selected_indices = np.random.choice(
+                class_indices[class_idx], 
+                size=min_class_size, 
+                replace=False
+            )
+            balanced_indices.extend(selected_indices)
+            
+        # Now do train/val split on balanced indices
         train_idx, val_idx = train_test_split(
-            range(len(train_full_dataset)),
+            balanced_indices,
             test_size=val_split,
-            stratify=labels,
+            stratify=[labels[i] for i in balanced_indices],
             random_state=42
         )
     else:
-        train_idx, val_idx = None, None  # Placeholder for other ranks
+        train_idx, val_idx = None, None
 
-    # **Broadcast split indices to all ranks**
+    # Broadcast split indices to all ranks
     train_idx_list = [train_idx] if rank == 0 else [None]
     val_idx_list = [val_idx] if rank == 0 else [None]
     
     barrier()
-
     broadcast_object_list(train_idx_list, src=0)
     broadcast_object_list(val_idx_list, src=0)
-
-    # **Barrier to ensure all ranks have received indices before proceeding**
     barrier()
 
     # Assign received indices to all ranks
@@ -310,11 +323,28 @@ def create_dataloaders_ohsumed(
     train_subset = Subset(train_full_dataset, train_idx)
     val_subset = Subset(train_full_dataset, val_idx)
     
-    # Create dataloaders with DistributedSampler
-    train_sampler = torch.utils.data.distributed.DistributedSampler(train_subset, shuffle=True, num_replicas=world_size, rank=rank)
-    val_sampler = torch.utils.data.distributed.DistributedSampler(val_subset, shuffle=False, num_replicas=world_size, rank=rank)
-    test_sampler = torch.utils.data.distributed.DistributedSampler(test_dataset, shuffle=False, num_replicas=world_size, rank=rank)
+    # Create samplers and loaders
+    train_sampler = torch.utils.data.distributed.DistributedSampler(
+        train_subset, 
+        shuffle=True, 
+        num_replicas=world_size, 
+        rank=rank
+    )
     
+    val_sampler = torch.utils.data.distributed.DistributedSampler(
+        val_subset, 
+        shuffle=False, 
+        num_replicas=world_size, 
+        rank=rank
+    )
+    
+    test_sampler = torch.utils.data.distributed.DistributedSampler(
+        test_dataset, 
+        shuffle=False, 
+        num_replicas=world_size, 
+        rank=rank
+    )
+
     # Create dataloaders
     train_loader = DataLoader(
         train_subset,
