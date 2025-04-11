@@ -233,16 +233,16 @@ def train_distributed(rank: int, world_size: int, args):
             
             if epoch == 0:
                 trainer.freeze_all_except_sentence()
-                trainer.optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, trainer.model.parameters()), lr=1e-4)
+                trainer.optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, trainer.model.parameters()), lr=args.learning_rate)
             elif epoch == 300:
                 trainer.freeze_all_except_word()
-                trainer.optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, trainer.model.parameters()), lr=1e-4)
+                trainer.optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, trainer.model.parameters()), lr=args.learning_rate)
             elif epoch == 600:
                 trainer.freeze_all_except_fusion()
-                trainer.optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, trainer.model.parameters()), lr=5e-3)
+                trainer.optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, trainer.model.parameters()), lr=args.learning_rate)
             elif epoch == 900:
                 trainer.unfreeze_all()
-                trainer.optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, trainer.model.parameters()), lr=5e-3)
+                trainer.optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, trainer.model.parameters()), lr=args.learning_rate)
 
             # Set epoch for distributed sampling
             train_loader.sampler.set_epoch(epoch)
